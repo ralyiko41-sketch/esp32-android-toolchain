@@ -8,6 +8,8 @@ on:
 env:
   TOOLCHAIN_VERSION: esp-2021r2-patch5
   GCC_VERSION: 8.4.0
+  # Silences the Node.js deprecation warning by forcing the updated runner
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-toolchain:
@@ -40,30 +42,25 @@ jobs:
           cd toolchain-original
           wget -q https://github.com/espressif/crosstool-NG/releases/download/${{ env.TOOLCHAIN_VERSION }}/xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
           tar -xzf xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
-          ls -la
 
       - name: Download GCC and apply xtensa patches
         run: |
           cd src
           
-          # 1. Download standard GCC
           wget -q https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.gz
           tar -xzf gcc-${{ env.GCC_VERSION }}.tar.gz
           
-          # 2. Clone Espressif's custom GCC using Git
           echo "Fetching Espressif GCC patches..."
           git clone --depth 1 -b ${{ env.TOOLCHAIN_VERSION }} https://github.com/espressif/gcc.git esp-gcc || \
           git clone --depth 1 -b esp-2021r2 https://github.com/espressif/gcc.git esp-gcc || \
           git clone --depth 1 -b esp-8.4.0 https://github.com/espressif/gcc.git esp-gcc
           
-          # 3. Merge Espressif's custom files into standard GCC
           cd gcc-${{ env.GCC_VERSION }}
           
           echo "Applying ESP32 patches..."
           cp -r ../esp-gcc/gcc/* gcc/ 2>/dev/null || true
           cp -r ../esp-gcc/libgcc/* libgcc/ 2>/dev/null || true
           
-          # 4. Download GCC prerequisites
           ./contrib/download_prerequisites
 
       - name: Download binutils
@@ -77,7 +74,9 @@ jobs:
           mkdir -p ${{ github.workspace }}/build/gcc
           cd ${{ github.workspace }}/build/gcc
           
-          export NDK="${ANDROID_NDK_HOME}"
+          # CRITICAL FIX: Explicitly grabbing the NDK r26 path from the setup step
+          # instead of relying on the hijacked ANDROID_NDK_HOME variable.
+          export NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           export HOST="aarch64-linux-android"
           export API="23"
           export TARGET="xtensa-esp32-elf"
@@ -101,7 +100,8 @@ jobs:
             AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
             STRIP="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
           
-          make -j$(nproc) all-gcc
+          # Added -Wno-error flags to prevent modern compilers from halting on trivial warnings
+          make CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" -j$(nproc) all-gcc
           make install-gcc
 
       - name: Build binutils for Android host
@@ -109,7 +109,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/build/binutils
           cd ${{ github.workspace }}/build/binutils
           
-          export NDK="${ANDROID_NDK_HOME}"
+          export NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
           export HOST="aarch64-linux-android"
           export API="23"
           export TARGET="xtensa-esp32-elf"
@@ -125,7 +125,7 @@ jobs:
             CXX="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++" \
             AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           
-          make -j$(nproc)
+          make CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" -j$(nproc)
           make install
 
       - name: Assemble Android toolchain
@@ -135,7 +135,6 @@ jobs:
           
           cp -r ${HOME}/toolchain-built/bin xtensa-esp32-elf/
           
-          # Using absolute paths to guarantee successful file copies
           ORIG="${{ github.workspace }}/toolchain-original/xtensa-esp32-elf"
           
           [ -d "${ORIG}/lib" ] && cp -r ${ORIG}/lib xtensa-esp32-elf/ || echo "No lib dir"
