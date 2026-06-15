@@ -45,14 +45,25 @@ jobs:
       - name: Download GCC and apply xtensa patches
         run: |
           cd src
+          
+          # 1. Download standard GCC
           wget -q https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.gz
           tar -xzf gcc-${{ env.GCC_VERSION }}.tar.gz
           
-          wget -q https://github.com/espressif/gcc/archive/refs/tags/${{ env.TOOLCHAIN_VERSION }}.tar.gz
-          tar -xzf ${{ env.TOOLCHAIN_VERSION }}.tar.gz
+          # 2. Clone Espressif's custom GCC using Git
+          echo "Fetching Espressif GCC patches..."
+          git clone --depth 1 -b ${{ env.TOOLCHAIN_VERSION }} https://github.com/espressif/gcc.git esp-gcc || \
+          git clone --depth 1 -b esp-2021r2 https://github.com/espressif/gcc.git esp-gcc || \
+          git clone --depth 1 -b esp-8.4.0 https://github.com/espressif/gcc.git esp-gcc
           
+          # 3. Merge Espressif's custom files into standard GCC
           cd gcc-${{ env.GCC_VERSION }}
-          cp -r ../../gcc-${{ env.TOOLCHAIN_VERSION }}/gcc/* . 2>/dev/null || true
+          
+          echo "Applying ESP32 patches..."
+          cp -r ../esp-gcc/gcc/* gcc/ 2>/dev/null || true
+          cp -r ../esp-gcc/libgcc/* libgcc/ 2>/dev/null || true
+          
+          # 4. Download GCC prerequisites
           ./contrib/download_prerequisites
 
       - name: Download binutils
