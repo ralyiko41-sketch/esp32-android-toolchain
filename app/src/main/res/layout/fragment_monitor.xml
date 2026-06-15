@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_void">
+
+    <!-- Toolbar -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+        android:background="@color/bg_panel" android:paddingHorizontal="10dp"
+        android:gravity="center_vertical">
+
+        <!-- Monitor / Plotter tabs -->
+        <TextView android:id="@+id/tab_monitor"
+            android:layout_width="wrap_content" android:layout_height="32dp"
+            android:text="Monitor" android:textSize="12sp" android:fontFamily="monospace"
+            android:textColor="@color/cyan" android:gravity="center" android:paddingHorizontal="12dp"
+            android:background="@drawable/tab_selected_bg" android:layout_marginEnd="4dp" />
+        <TextView android:id="@+id/tab_plotter"
+            android:layout_width="wrap_content" android:layout_height="32dp"
+            android:text="Plotter" android:textSize="12sp" android:fontFamily="monospace"
+            android:textColor="@color/text_muted" android:gravity="center" android:paddingHorizontal="12dp"
+            android:background="@drawable/tab_bg" android:layout_marginEnd="8dp" />
+
+        <!-- Baud spinner -->
+        <Spinner android:id="@+id/spinner_baud"
+            android:layout_width="100dp" android:layout_height="32dp"
+            android:background="@drawable/card_bg" android:paddingHorizontal="6dp" />
+
+        <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
+
+        <!-- Status -->
+        <TextView android:id="@+id/tv_status"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Disconnected" android:textColor="@color/text_muted"
+            android:textSize="11sp" android:layout_marginEnd="8dp" />
+
+        <!-- Connect/Disconnect -->
+        <Button android:id="@+id/btn_connect"
+            android:layout_width="80dp" android:layout_height="32dp"
+            android:text="Connect" android:textSize="11sp"
+            android:backgroundTint="@color/green" android:textColor="#000"
+            style="@style/Widget.MaterialComponents.Button" />
+        <Button android:id="@+id/btn_disconnect"
+            android:layout_width="90dp" android:layout_height="32dp"
+            android:text="Disconnect" android:textSize="10sp"
+            android:visibility="gone"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:textColor="@color/red" />
+        <ImageButton android:id="@+id/btn_clear" style="@style/ToolbarIconBtn"
+            android:src="@drawable/ic_clear" android:layout_marginStart="4dp" />
+    </LinearLayout>
+
+    <!-- Monitor log -->
+    <ScrollView android:id="@+id/scroll_log"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:padding="8dp">
+        <TextView android:id="@+id/tv_log"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:fontFamily="monospace" android:textSize="12sp"
+            android:textColor="@color/text_primary" android:lineSpacingExtra="3dp"
+            android:textIsSelectable="true" />
+    </ScrollView>
+
+    <!-- Plotter chart -->
+    <com.github.mikephil.charting.charts.LineChart
+        android:id="@+id/chart"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone" />
+
+    <!-- Send bar -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp"
+        android:background="@color/bg_panel" android:padding="8dp" android:gravity="center_vertical">
+        <EditText android:id="@+id/et_send"
+            android:layout_width="0dp" android:layout_height="36dp" android:layout_weight="1"
+            android:hint="Send command..." android:textColorHint="@color/text_muted"
+            android:textColor="@color/text_primary" android:textSize="13sp"
+            android:fontFamily="monospace" android:background="@drawable/input_bg"
+            android:paddingHorizontal="10dp" android:imeOptions="actionSend"
+            android:inputType="text" android:layout_marginEnd="8dp" />
+        <Button android:id="@+id/btn_send"
+            android:layout_width="70dp" android:layout_height="36dp"
+            android:text="SEND" android:textSize="12sp" android:fontFamily="monospace"
+            android:backgroundTint="@color/cyan" android:textColor="#000"
+            style="@style/Widget.MaterialComponents.Button" />
+    </LinearLayout>
+</LinearLayout>

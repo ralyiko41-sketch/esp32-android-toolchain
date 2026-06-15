@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/bg_base">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+        android:background="@color/bg_panel" android:paddingHorizontal="16dp" android:gravity="center_vertical">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Settings" android:textColor="@color/text_primary"
+            android:textSize="16sp" android:fontFamily="monospace" android:textStyle="bold"/>
+    </LinearLayout>
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="14dp">
+
+            <!-- Compiler Status -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="COMPILER" android:textColor="@color/text_muted" android:textSize="10sp"
+                android:textAllCaps="true" android:letterSpacing="0.1" android:layout_marginBottom="6dp"/>
+            <TextView android:id="@+id/tv_compiler_status" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Checking..."
+                android:textColor="@color/amber" android:textSize="12sp"
+                android:padding="10dp" android:background="@color/bg_panel" android:layout_marginBottom="8dp"/>
+            <Button android:id="@+id/btn_setup_compiler" android:layout_width="match_parent"
+                android:layout_height="44dp" android:text="⬇ Setup Compiler (download arduino-cli + ESP32 core)"
+                android:backgroundTint="@color/cyan" android:textColor="#000"
+                style="@style/Widget.MaterialComponents.Button" android:textSize="12sp"
+                android:layout_marginBottom="8dp"/>
+            <ProgressBar android:id="@+id/setup_progress" android:layout_width="match_parent"
+                android:layout_height="8dp" android:indeterminate="true" android:visibility="gone"
+                android:progressTint="@color/cyan" android:layout_marginBottom="4dp"/>
+            <LinearLayout android:id="@+id/layout_setup_log" android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" android:background="@color/bg_void"
+                android:layout_marginBottom="12dp" android:visibility="gone">
+                <ScrollView android:id="@+id/scroll_setup_log" android:layout_width="match_parent"
+                    android:layout_height="120dp">
+                    <TextView android:id="@+id/tv_setup_log" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:padding="8dp"
+                        android:fontFamily="monospace" android:textSize="10sp" android:textColor="@color/green"/>
+                </ScrollView>
+                <Button android:id="@+id/btn_copy_log" android:layout_width="match_parent"
+                    android:layout_height="36dp" android:text="📋 Copy Logs to Clipboard"
+                    android:backgroundTint="@color/bg_panel"
+                    android:textColor="@color/text_primary" android:textSize="10sp"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"/>
+            </LinearLayout>
+
+            <!-- Cloud Compiler -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="CLOUD COMPILER URL (fallback)" android:textColor="@color/text_muted"
+                android:textSize="10sp" android:textAllCaps="true" android:layout_marginTop="14dp" android:layout_marginBottom="6dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="12dp">
+                <EditText android:id="@+id/et_cloud_url" android:layout_width="0dp" android:layout_height="44dp"
+                    android:layout_weight="1" android:hint="http://192.168.x.x:3000/compile"
+                    android:textColorHint="@color/text_muted" android:textColor="@color/text_primary"
+                    android:textSize="12sp" android:fontFamily="monospace"
+                    android:background="@color/bg_surface" android:paddingHorizontal="10dp"
+                    android:inputType="textUri" android:layout_marginEnd="8dp"/>
+                <Button android:id="@+id/btn_save_url" android:layout_width="wrap_content" android:layout_height="44dp"
+                    android:text="Save" android:backgroundTint="@color/cyan" android:textColor="#000"
+                    style="@style/Widget.MaterialComponents.Button"/>
+            </LinearLayout>
+
+            <!-- Appearance -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="APPEARANCE" android:textColor="@color/text_muted" android:textSize="10sp"
+                android:textAllCaps="true" android:layout_marginBottom="6dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="50dp"
+                android:background="@color/bg_panel" android:paddingHorizontal="14dp"
+                android:gravity="center_vertical" android:layout_marginBottom="1dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Dark Theme" android:textColor="@color/text_primary" android:textSize="13sp"/>
+                <Switch android:id="@+id/switch_dark" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="50dp"
+                android:background="@color/bg_panel" android:paddingHorizontal="14dp"
+                android:gravity="center_vertical" android:layout_marginBottom="12dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Font Size" android:textColor="@color/text_primary" android:textSize="13sp"/>
+                <ImageButton android:id="@+id/btn_font_minus" android:layout_width="36dp" android:layout_height="36dp"
+                    android:background="@color/bg_surface" android:src="@drawable/ic_remove"/>
+                <TextView android:id="@+id/tv_font_size" android:layout_width="40dp" android:layout_height="wrap_content"
+                    android:text="14" android:textColor="@color/text_primary" android:gravity="center"
+                    android:textSize="15sp" android:fontFamily="monospace" android:textStyle="bold"/>
+                <ImageButton android:id="@+id/btn_font_plus" android:layout_width="36dp" android:layout_height="36dp"
+                    android:background="@color/bg_surface" android:src="@drawable/ic_add"/>
+            </LinearLayout>
+
+            <!-- Editor -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="EDITOR" android:textColor="@color/text_muted" android:textSize="10sp"
+                android:textAllCaps="true" android:layout_marginBottom="6dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="50dp"
+                android:background="@color/bg_panel" android:paddingHorizontal="14dp"
+                android:gravity="center_vertical" android:layout_marginBottom="1dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Auto Indent" android:textColor="@color/text_primary" android:textSize="13sp"/>
+                <Switch android:id="@+id/switch_auto_indent" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="50dp"
+                android:background="@color/bg_panel" android:paddingHorizontal="14dp"
+                android:gravity="center_vertical" android:layout_marginBottom="12dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Word Wrap" android:textColor="@color/text_primary" android:textSize="13sp"/>
+                <Switch android:id="@+id/switch_word_wrap" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            </LinearLayout>
+
+            <!-- Flash -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="FLASH BAUD RATE" android:textColor="@color/text_muted"
+                android:textSize="10sp" android:textAllCaps="true" android:layout_marginBottom="6dp"/>
+            <Spinner android:id="@+id/spinner_flash_baud" android:layout_width="match_parent"
+                android:layout_height="44dp" android:background="@color/bg_panel" android:paddingHorizontal="14dp"
+                android:entries="@array/flash_bauds" android:layout_marginBottom="20dp"/>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

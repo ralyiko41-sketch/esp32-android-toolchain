@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_void">#070b18</color>
+    <color name="bg_base">#0d1220</color>
+    <color name="bg_panel">#111827</color>
+    <color name="bg_surface">#1a2235</color>
+    <color name="bg_elevated">#202d42</color>
+    <color name="cyan">#00d4ff</color>
+    <color name="cyan_dark">#0090b8</color>
+    <color name="green">#00e676</color>
+    <color name="green_dark">#00a352</color>
+    <color name="amber">#ffb300</color>
+    <color name="red">#ff4d4d</color>
+    <color name="purple">#b388ff</color>
+    <color name="blue">#4a9eff</color>
+    <color name="text_primary">#e8edf5</color>
+    <color name="text_secondary">#8899b0</color>
+    <color name="text_muted">#4a5a72</color>
+    <color name="text_dim">#2a3a52</color>
+    <color name="border_dim">#0f172a</color>
+    <color name="border_mid">#1e293b</color>
+    <color name="nav_item_color">#8899b0</color>
+    <color name="nav_item_selected">#00d4ff</color>
+    <!-- status bar -->
+    <color name="colorPrimary">#070b18</color>
+    <color name="colorPrimaryVariant">#0d1220</color>
+    <color name="colorOnPrimary">#e8edf5</color>
+</resources>

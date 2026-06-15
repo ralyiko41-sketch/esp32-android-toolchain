@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical" android:padding="14dp"
+    android:background="?attr/selectableItemBackground"
+    android:foreground="?attr/selectableItemBackground">
+    <TextView android:id="@+id/tv_board_name" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textColor="@color/text_primary"
+        android:textSize="13sp" android:fontFamily="monospace" android:textStyle="bold"/>
+    <TextView android:id="@+id/tv_board_fqbn" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textColor="@color/text_dim"
+        android:textSize="10sp" android:fontFamily="monospace" android:layout_marginTop="2dp"/>
+    <View android:layout_width="match_parent" android:layout_height="1dp"
+        android:background="@color/border_dim" android:layout_marginTop="10dp"/>
+</LinearLayout>

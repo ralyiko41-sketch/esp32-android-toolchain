@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/bg_base">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+        android:background="@color/bg_panel" android:paddingHorizontal="16dp" android:gravity="center_vertical">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="OTA Flash (WiFi)" android:textColor="@color/text_primary"
+            android:textSize="16sp" android:fontFamily="monospace" android:textStyle="bold"/>
+    </LinearLayout>
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="14dp">
+            <EditText android:id="@+id/et_ota_ip" android:layout_width="match_parent" android:layout_height="44dp"
+                android:hint="ESP32 IP Address (e.g. 192.168.1.100)" android:textColorHint="@color/text_muted"
+                android:textColor="@color/text_primary" android:textSize="13sp" android:fontFamily="monospace"
+                android:background="@color/bg_surface" android:paddingHorizontal="10dp"
+                android:inputType="textUri" android:layout_marginBottom="8dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="8dp">
+                <EditText android:id="@+id/et_ota_port" android:layout_width="0dp" android:layout_height="44dp"
+                    android:layout_weight="1" android:hint="Port (3232)" android:textColorHint="@color/text_muted"
+                    android:textColor="@color/text_primary" android:textSize="13sp" android:fontFamily="monospace"
+                    android:background="@color/bg_surface" android:paddingHorizontal="10dp"
+                    android:inputType="number" android:layout_marginEnd="8dp"/>
+                <EditText android:id="@+id/et_ota_password" android:layout_width="0dp" android:layout_height="44dp"
+                    android:layout_weight="2" android:hint="Password (optional)" android:textColorHint="@color/text_muted"
+                    android:textColor="@color/text_primary" android:textSize="13sp"
+                    android:background="@color/bg_surface" android:paddingHorizontal="10dp" android:inputType="textPassword"/>
+            </LinearLayout>
+            <Button android:id="@+id/btn_ota_flash" android:layout_width="match_parent" android:layout_height="48dp"
+                android:text="⚡  Flash via OTA (WiFi)" android:backgroundTint="@color/cyan" android:textColor="#000"
+                style="@style/Widget.MaterialComponents.Button" android:textSize="14sp"
+                android:fontFamily="monospace" android:layout_marginBottom="12dp"/>
+            <ProgressBar android:id="@+id/ota_progress" android:layout_width="match_parent"
+                android:layout_height="4dp" android:indeterminate="true" android:visibility="gone"
+                android:progressTint="@color/cyan" android:layout_marginBottom="8dp"/>
+            <ScrollView android:id="@+id/scroll_ota" android:layout_width="match_parent" android:layout_height="180dp"
+                android:background="@color/bg_void" android:padding="8dp">
+                <TextView android:id="@+id/tv_ota_output" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:fontFamily="monospace"
+                    android:textSize="11sp" android:textColor="@color/green"/>
+            </ScrollView>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Required in your sketch:\n\n#include &lt;WiFi.h&gt;\n#include &lt;ArduinoOTA.h&gt;\n\n// In setup():\nWiFi.begin(ssid, pass);\nArduinoOTA.begin();\n\n// In loop():\nArduinoOTA.handle();\n\nOpen Serial Monitor to see the ESP32 IP, then enter it above."
+                android:textColor="@color/text_secondary" android:textSize="12sp" android:fontFamily="monospace"
+                android:padding="12dp" android:background="@color/bg_panel" android:layout_marginTop="10dp"
+                android:lineSpacingExtra="3dp"/>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

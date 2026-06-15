@@ -1,0 +1,156 @@
+name: Build ESP32 Android Toolchain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  TOOLCHAIN_VERSION: esp-2021r2-patch5
+  GCC_VERSION: 8.4.0
+
+jobs:
+  build-toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Android NDK r26
+      uses: nttld/setup-ndk@v1
+      with:
+        ndkVersion: r26
+        androidVersion: 23
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gawk bison flex texinfo help2man wget libtool make \
+          cmake g++ git autoconf unzip zip xz-utils bc rsync python3
+
+    - name: Create directories
+      run: |
+        mkdir -p src toolchain-original toolchain-android
+
+    - name: Download ESP32 toolchain for reference
+      run: |
+        cd toolchain-original
+        wget -q https://github.com/espressif/crosstool-NG/releases/download/${{ env.TOOLCHAIN_VERSION }}/xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
+        tar -xzf xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
+        ls -la
+
+    - name: Download GCC and apply xtensa patches
+      run: |
+        cd src
+        wget -q https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.gz
+        tar -xzf gcc-${{ env.GCC_VERSION }}.tar.gz
+        
+        wget -q https://github.com/espressif/gcc/archive/refs/tags/${{ env.TOOLCHAIN_VERSION }}.tar.gz
+        tar -xzf ${{ env.TOOLCHAIN_VERSION }}.tar.gz
+        
+        cd gcc-${{ env.GCC_VERSION }}
+        cp -r ../../gcc-${{ env.TOOLCHAIN_VERSION }}/gcc/* . 2>/dev/null || true
+        ./contrib/download_prerequisites
+
+    - name: Download binutils
+      run: |
+        cd src
+        wget -q https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.gz
+        tar -xzf binutils-2.38.tar.gz
+
+    - name: Build GCC for Android host
+      run: |
+        mkdir -p ${{ github.workspace }}/build/gcc
+        cd ${{ github.workspace }}/build/gcc
+        
+        export NDK="${ANDROID_NDK_HOME}"
+        export HOST="aarch64-linux-android"
+        export API="23"
+        export TARGET="xtensa-esp32-elf"
+        
+        ../../src/gcc-${{ env.GCC_VERSION }}/configure \
+          --target=${TARGET} \
+          --host=${HOST} \
+          --build=x86_64-linux-gnu \
+          --prefix="${HOME}/toolchain-built" \
+          --disable-multilib \
+          --disable-shared \
+          --enable-languages=c,c++ \
+          --without-headers \
+          --disable-bootstrap \
+          --disable-libssp \
+          --disable-libstdcxx-pch \
+          --disable-libgomp \
+          --disable-nls \
+          CC="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang" \
+          CXX="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++" \
+          AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
+          STRIP="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+
+        make -j$(nproc) all-gcc
+        make install-gcc
+
+    - name: Build binutils for Android host
+      run: |
+        mkdir -p ${{ github.workspace }}/build/binutils
+        cd ${{ github.workspace }}/build/binutils
+        
+        export NDK="${ANDROID_NDK_HOME}"
+        export HOST="aarch64-linux-android"
+        export API="23"
+        export TARGET="xtensa-esp32-elf"
+
+        ../../src/binutils-2.38/configure \
+          --target=${TARGET} \
+          --host=${HOST} \
+          --build=x86_64-linux-gnu \
+          --prefix="${HOME}/toolchain-built" \
+          --disable-multilib \
+          --disable-nls \
+          CC="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang" \
+          CXX="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++" \
+          AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+
+        make -j$(nproc)
+        make install
+
+    - name: Assemble Android toolchain
+      run: |
+        cd toolchain-android
+        mkdir -p xtensa-esp32-elf
+        
+        cp -r ${HOME}/toolchain-built/bin xtensa-esp32-elf/
+        
+        ORIG=toolchain-original/xtensa-esp32-elf-linux-arm64
+        cp -r ${ORIG}/lib xtensa-esp32-elf/
+        cp -r ${ORIG}/include xtensa-esp32-elf/
+        [ -d "${ORIG}/share" ] && cp -r ${ORIG}/share xtensa-esp32-elf/
+        [ -d "${ORIG}/xtensa-esp32-elf" ] && cp -r ${ORIG}/xtensa-esp32-elf xtensa-esp32-elf/
+
+    - name: Verify toolchain structure
+      run: |
+        cd toolchain-android/xtensa-esp32-elf
+        echo "=== Binaries ==="
+        ls -la bin/ 2>/dev/null || echo "No bin directory"
+        echo "=== Checking binary format ==="
+        file bin/xtensa-esp32-elf-gcc 2>/dev/null || echo "GCC binary not found"
+        
+        echo "=== Checking for ESP32 libgcc ==="
+        ls -la lib/gcc/xtensa-esp32-elf/ 2>/dev/null | head -5 || echo "No target libgcc"
+
+    - name: Package toolchain
+      run: |
+        cd toolchain-android
+        tar -czf ../toolchain-android-arm64.tar.gz xtensa-esp32-elf
+        ls -la ../toolchain-android-arm64.tar.gz
+        du -sh ../toolchain-android-arm64.tar.gz
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp32-android-toolchain-arm64
+        path: toolchain-android-arm64.tar.gz
+        retention-days: 30

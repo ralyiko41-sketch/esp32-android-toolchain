@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="60dp"
+    android:orientation="horizontal" android:paddingHorizontal="14dp"
+    android:gravity="center_vertical" android:background="?attr/selectableItemBackground">
+    <ImageView android:layout_width="24dp" android:layout_height="24dp"
+        android:src="@drawable/ic_chip" android:tint="@color/cyan" android:layout_marginEnd="12dp"/>
+    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+        <TextView android:id="@+id/tv_device_name" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:textColor="@color/text_primary"
+            android:textSize="13sp" android:fontFamily="monospace" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_device_vid" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:textColor="@color/text_muted"
+            android:textSize="10sp" android:fontFamily="monospace"/>
+    </LinearLayout>
+    <ImageView android:id="@+id/iv_check" android:layout_width="20dp" android:layout_height="20dp"
+        android:src="@drawable/ic_check" android:tint="@color/cyan" android:visibility="gone"/>
+</LinearLayout>
