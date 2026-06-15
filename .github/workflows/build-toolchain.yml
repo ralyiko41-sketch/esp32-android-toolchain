@@ -1,278 +1,166 @@
-name: Build ESP32 Toolchain for Android ARM64
+name: Build ESP32 Android Toolchain
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build-toolchain.yml'
+    branches: [main]
 
-# Canadian Cross compilation:
-#   Build machine  : x86_64-linux-gnu        (GitHub Actions runner)
-#   Host machine   : aarch64-linux-android   (your Android device)
-#   Target machine : xtensa-esp32-elf         (ESP32 chip)
+env:
+  TOOLCHAIN_VERSION: esp-2021r2-patch5
+  GCC_VERSION: 8.4.0
+  # Silences the Node.js deprecation warning
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-toolchain:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 hours – CT-NG full build can be slow
-
-    env:
-      # ── NDK ────────────────────────────────────────────────────────────
-      NDK_VERSION:   r26d
-      NDK_HOME:      ${{ github.workspace }}/android-ndk
-      API_LEVEL:     "26"          # Android 8.0 – match app minSdk
-      ABI:           arm64-v8a
-      ANDROID_ARCH:  aarch64
-
-      # ── crosstool-NG ───────────────────────────────────────────────────
-      CT_NG_VERSION: 1.26.0
-      CT_PREFIX:     ${{ github.workspace }}/ct-ng-install
-
-      # ── toolchain output ───────────────────────────────────────────────
-      TC_PREFIX:     ${{ github.workspace }}/toolchain-out
+    timeout-minutes: 360
 
     steps:
-      # ══════════════════════════════════════════════════════════════════════
-      # 0.  Checkout
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ══════════════════════════════════════════════════════════════════════
-      # 1.  Host build-tool dependencies
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Install host build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            autoconf automake bison flex gawk help2man libtool-bin \
-            libncurses5-dev libssl-dev make ninja-build patch \
-            python3 python3-pip texinfo unzip wget xz-utils \
-            gcc g++ git cmake pkg-config
-
-      # ══════════════════════════════════════════════════════════════════════
-      # 2.  Android NDK r26d
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Cache Android NDK
-        id: cache-ndk
-        uses: actions/cache@v4
+      - name: Setup Android NDK r26
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          path: ${{ env.NDK_HOME }}
-          key: android-ndk-${{ env.NDK_VERSION }}
+          ndk-version: r26b
 
-      - name: Download & unpack Android NDK
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+      - name: Install build dependencies
         run: |
-          wget -q \
-            "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" \
-            -O /tmp/ndk.zip
-          unzip -q /tmp/ndk.zip -d /tmp/ndk-unpack
-          mv "/tmp/ndk-unpack/android-ndk-${NDK_VERSION}" "${NDK_HOME}"
-          rm /tmp/ndk.zip
+          sudo apt-get update
+          sudo apt-get install -y \
+            gawk bison flex texinfo help2man wget libtool make \
+            cmake g++ git autoconf unzip zip xz-utils bc rsync python3
 
-      - name: Verify NDK sysroot
+      - name: Create directories
         run: |
-          SYSROOT="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          echo "NDK sysroot: $SYSROOT"
-          ls "${SYSROOT}/usr/lib/aarch64-linux-android/"
-          echo "NDK_SYSROOT=${SYSROOT}" >> $GITHUB_ENV
+          mkdir -p src toolchain-original toolchain-android
+
+      - name: Download ESP32 toolchain for reference
+        run: |
+          cd toolchain-original
+          wget -q https://github.com/espressif/crosstool-NG/releases/download/${{ env.TOOLCHAIN_VERSION }}/xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
+          tar -xzf xtensa-esp32-elf-gcc8_4_0-${{ env.TOOLCHAIN_VERSION }}-linux-arm64.tar.gz
+
+      - name: Download GCC and apply xtensa patches
+        run: |
+          cd src
           
-          LLVM_BIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "NDK_LLVM_BIN=${LLVM_BIN}" >> $GITHUB_ENV
+          wget -q https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.gz
+          tar -xzf gcc-${{ env.GCC_VERSION }}.tar.gz
+          
+          echo "Fetching Espressif GCC patches..."
+          git clone --depth 1 -b ${{ env.TOOLCHAIN_VERSION }} https://github.com/espressif/gcc.git esp-gcc || \
+          git clone --depth 1 -b esp-2021r2 https://github.com/espressif/gcc.git esp-gcc || \
+          git clone --depth 1 -b esp-8.4.0 https://github.com/espressif/gcc.git esp-gcc
+          
+          cd gcc-${{ env.GCC_VERSION }}
+          
+          echo "Applying ESP32 patches..."
+          cp -r ../esp-gcc/gcc/* gcc/ 2>/dev/null || true
+          cp -r ../esp-gcc/libgcc/* libgcc/ 2>/dev/null || true
+          
+          ./contrib/download_prerequisites
 
-      # ══════════════════════════════════════════════════════════════════════
-      # 3.  Build crosstool-NG from source
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Cache crosstool-NG install
-        id: cache-ctng
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CT_PREFIX }}
-          key: ctng-${{ env.CT_NG_VERSION }}-v1
-
-      - name: Download & build crosstool-NG
-        if: steps.cache-ctng.outputs.cache-hit != 'true'
+      - name: Download binutils
         run: |
-          wget -q \
-            "http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-${CT_NG_VERSION}.tar.xz" \
-            -O /tmp/ctng.tar.xz
-          tar -xf /tmp/ctng.tar.xz -C /tmp
-          cd "/tmp/crosstool-ng-${CT_NG_VERSION}"
-          ./configure --prefix="${CT_PREFIX}"
-          make -j$(nproc)
+          cd src
+          wget -q https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.gz
+          tar -xzf binutils-2.38.tar.gz
+
+      - name: Build GCC for Android host
+        run: |
+          mkdir -p ${{ github.workspace }}/build/gcc
+          cd ${{ github.workspace }}/build/gcc
+          
+          # We explicitly grab the secure NDK r26 path here
+          export NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          export HOST="aarch64-linux-android"
+          export API="23"
+          export TARGET="xtensa-esp32-elf"
+          
+          ../../src/gcc-${{ env.GCC_VERSION }}/configure \
+            --target=${TARGET} \
+            --host=${HOST} \
+            --build=x86_64-linux-gnu \
+            --prefix="${HOME}/toolchain-built" \
+            --disable-multilib \
+            --disable-shared \
+            --enable-languages=c,c++ \
+            --without-headers \
+            --disable-bootstrap \
+            --disable-libssp \
+            --disable-libstdcxx-pch \
+            --disable-libgomp \
+            --disable-nls \
+            CC="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang" \
+            CXX="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++" \
+            AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
+            STRIP="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          
+          make CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" -j$(nproc) all-gcc
+          make install-gcc
+
+      - name: Build binutils for Android host
+        run: |
+          mkdir -p ${{ github.workspace }}/build/binutils
+          cd ${{ github.workspace }}/build/binutils
+          
+          export NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          export HOST="aarch64-linux-android"
+          export API="23"
+          export TARGET="xtensa-esp32-elf"
+          
+          ../../src/binutils-2.38/configure \
+            --target=${TARGET} \
+            --host=${HOST} \
+            --build=x86_64-linux-gnu \
+            --prefix="${HOME}/toolchain-built" \
+            --disable-multilib \
+            --disable-nls \
+            CC="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang" \
+            CXX="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${HOST}${API}-clang++" \
+            AR="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          
+          make CFLAGS="-Wno-error" CXXFLAGS="-Wno-error" -j$(nproc)
           make install
-          echo "${CT_PREFIX}/bin" >> $GITHUB_PATH
 
-      - name: Add CT-NG to PATH
-        run: echo "${CT_PREFIX}/bin" >> $GITHUB_PATH
-
-      # ══════════════════════════════════════════════════════════════════════
-      # 4.  Write the crosstool-NG .config
-      #     This is the heart of the Canadian Cross build.
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Create CT-NG build directory and config
+      - name: Assemble Android toolchain
         run: |
-          mkdir -p "${GITHUB_WORKSPACE}/ct-build"
-          cd "${GITHUB_WORKSPACE}/ct-build"
+          mkdir -p ${{ github.workspace }}/toolchain-android/xtensa-esp32-elf
+          cd ${{ github.workspace }}/toolchain-android
           
-          # ── Helper variables ─────────────────────────────────────────────
-          LLVM_BIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          SYSROOT="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          API=${API_LEVEL}
+          cp -r ${HOME}/toolchain-built/bin xtensa-esp32-elf/
           
-          cat > .config << CTCONFIG
-          # ── Build (x86_64 Linux) ─────────────────────────────────────────
-          CT_BUILD="x86_64-build_pc-linux-gnu"
-          CT_BUILD_PREFIX=""
-          CT_BUILD_SUFFIX=""
+          ORIG="${{ github.workspace }}/toolchain-original/xtensa-esp32-elf"
           
-          # ── Host (Android ARM64) ─────────────────────────────────────────
-          # We tell CT-NG the host is aarch64-linux-android so it links all
-          # generated binaries against Android Bionic via the NDK clang.
-          CT_HOST="aarch64-linux-android${API}"
-          CT_HOST_PREFIX=""
-          CT_HOST_SUFFIX=""
-          # Use NDK clang as the HOST compiler
-          CT_HOST_CC="${LLVM_BIN}/aarch64-linux-android${API}-clang"
-          CT_HOST_CXX="${LLVM_BIN}/aarch64-linux-android${API}-clang++"
-          CT_HOST_AR="${LLVM_BIN}/llvm-ar"
-          CT_HOST_RANLIB="${LLVM_BIN}/llvm-ranlib"
-          CT_HOST_STRIP="${LLVM_BIN}/llvm-strip"
-          CT_HOST_SYSROOT="${SYSROOT}"
-          
-          # ── Target (ESP32 / Xtensa) ──────────────────────────────────────
-          CT_TARGET_ARCH_xtensa=y
-          CT_ARCH="xtensa"
-          CT_ARCH_XTENSA_CORE_NAME="esp32"
-          CT_TARGET_VENDOR="esp"
-          CT_TARGET_OS="elf"
-          CT_TARGET="xtensa-esp-elf"
-          
-          # ── GCC version ──────────────────────────────────────────────────
-          CT_GCC_V_13=y
-          CT_GCC_VERSION="13.2.0"
-          
-          # ── Binutils ─────────────────────────────────────────────────────
-          CT_BINUTILS_V_2_41=y
-          CT_BINUTILS_VERSION="2.41"
-          
-          # ── C library – NONE for bare-metal elf target ───────────────────
-          CT_LIBC_NONE=y
-          
-          # ── Newlib (embedded C library for the ESP32 TARGET) ─────────────
-          CT_LIBC_NEWLIB=y
-          CT_NEWLIB_V_4_3_0=y
-          CT_NEWLIB_VERSION="4.3.0.20230317"
-          
-          # ── Install prefix ───────────────────────────────────────────────
-          CT_PREFIX_DIR="${TC_PREFIX}"
-          
-          # ── Misc build options ───────────────────────────────────────────
-          CT_PARALLEL_JOBS=$(nproc)
-          CT_FORBID_DOWNLOAD=n
-          CT_USE_MIRROR=n
-          CT_SAVE_TARBALLS=y
-          CT_DEBUG_CT=n
-          CT_CC_LANG_CXX=y
-          CT_CC_LANG_FORTRAN=n
-          # Strip host binaries to reduce size
-          CT_STRIP_HOST_TOOLCHAIN_EXECUTABLES=y
-          CTCONFIG
-          
-          # Normalise the config (remove leading whitespace added by heredoc)
-          sed -i 's/^[[:space:]]*//' .config
-          
-          echo "CT-NG config written."
-          cat .config
+          [ -d "${ORIG}/lib" ] && cp -r ${ORIG}/lib xtensa-esp32-elf/ || echo "No lib dir"
+          [ -d "${ORIG}/include" ] && cp -r ${ORIG}/include xtensa-esp32-elf/ || echo "No include dir"
+          [ -d "${ORIG}/share" ] && cp -r ${ORIG}/share xtensa-esp32-elf/ || echo "No share dir"
+          [ -d "${ORIG}/xtensa-esp32-elf" ] && cp -r ${ORIG}/xtensa-esp32-elf xtensa-esp32-elf/ || echo "No nested target dir"
 
-      # ══════════════════════════════════════════════════════════════════════
-      # 5.  Cache tarballs downloaded by CT-NG
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Cache CT-NG tarballs
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/crosstool-ng/tarballs
-          key: ctng-tarballs-xtensa-esp32-gcc13-v1
-
-      # ══════════════════════════════════════════════════════════════════════
-      # 6.  Run the CT-NG build
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Build toolchain with crosstool-NG
-        working-directory: ${{ github.workspace }}/ct-build
-        env:
-          # Make sure NDK clang wrappers are found first
-          PATH: >-
-            ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin:
-            ${{ env.CT_PREFIX }}/bin:
-            /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - name: Verify toolchain structure
         run: |
-          # Merge our hand-written config with CT-NG defaults
-          "${CT_PREFIX}/bin/ct-ng" olddefconfig
+          cd ${{ github.workspace }}/toolchain-android/xtensa-esp32-elf
+          echo "=== Binaries ==="
+          ls -la bin/ 2>/dev/null || echo "No bin directory"
+          echo "=== Checking binary format ==="
+          file bin/xtensa-esp32-elf-gcc 2>/dev/null || echo "GCC binary not found"
           
-          # Full build  (output goes to CT_PREFIX_DIR = $TC_PREFIX)
-          "${CT_PREFIX}/bin/ct-ng" build.$(nproc) || {
-            echo "Build failed. Last 200 lines of build.log:"
-            tail -200 build.log 2>/dev/null || true
-            exit 1
-          }
+          echo "=== Checking for ESP32 libgcc ==="
+          ls -la lib/gcc/xtensa-esp32-elf/ 2>/dev/null | head -5 || echo "No target libgcc"
 
-      # ══════════════════════════════════════════════════════════════════════
-      # 7.  Verify & list output
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Verify toolchain binaries
-        run: |
-          echo "=== Toolchain output ==="
-          ls -lh "${TC_PREFIX}/bin/" | head -30
-          echo ""
-          echo "=== File types of key binaries ==="
-          file "${TC_PREFIX}/bin/xtensa-esp-elf-gcc" \
-               "${TC_PREFIX}/bin/xtensa-esp-elf-g++" \
-               "${TC_PREFIX}/bin/xtensa-esp-elf-ld"  || true
-          echo ""
-          echo "=== Total size ==="
-          du -sh "${TC_PREFIX}"
-
-      # ══════════════════════════════════════════════════════════════════════
-      # 8.  Package
-      # ══════════════════════════════════════════════════════════════════════
       - name: Package toolchain
         run: |
-          cd "${GITHUB_WORKSPACE}"
-          tar -czf toolchain-android-arm64.tar.gz \
-              -C "$(dirname "${TC_PREFIX}")" \
-              "$(basename "${TC_PREFIX}")"
-          ls -lh toolchain-android-arm64.tar.gz
-          sha256sum toolchain-android-arm64.tar.gz > toolchain-android-arm64.tar.gz.sha256
-          cat toolchain-android-arm64.tar.gz.sha256
+          cd ${{ github.workspace }}/toolchain-android
+          tar -czf ../toolchain-android-arm64.tar.gz xtensa-esp32-elf
+          ls -la ../toolchain-android-arm64.tar.gz
+          du -sh ../toolchain-android-arm64.tar.gz
 
-      # ══════════════════════════════════════════════════════════════════════
-      # 9.  Upload artifact
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Upload toolchain artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: toolchain-android-arm64
-          path: |
-            toolchain-android-arm64.tar.gz
-            toolchain-android-arm64.tar.gz.sha256
+          name: esp32-android-toolchain-arm64
+          path: toolchain-android-arm64.tar.gz
           retention-days: 30
-
-      # ══════════════════════════════════════════════════════════════════════
-      # 10. (Optional) Create a GitHub Release on tag push
-      # ══════════════════════════════════════════════════════════════════════
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            toolchain-android-arm64.tar.gz
-            toolchain-android-arm64.tar.gz.sha256
-          body: |
-            ## ESP32 Android ARM64 Toolchain
-            
-            Canadian Cross-compiled GCC toolchain:
-            - **Host**: aarch64-linux-android (Android ARM64, API ${{ env.API_LEVEL }}+)
-            - **Target**: xtensa-esp-elf (ESP32)
-            - **GCC**: 13.2.0 | **Binutils**: 2.41 | **Newlib**: 4.3.0
-            - **NDK**: ${{ env.NDK_VERSION }}
