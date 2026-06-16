@@ -3,7 +3,8 @@ name: Build ESP32 Android Toolchain
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   build-toolchain:
@@ -18,15 +19,12 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r26b
+          ndk-version: 'r26b'
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            autoconf automake bison flex gawk help2man libtool-bin \
-            libncurses5-dev libssl-dev make patch python3 python3-pip \
-            texinfo unzip wget xz-utils gcc g++ git cmake crossbuild-essential-arm64
+          sudo apt-get install -y autoconf automake bison flex gawk help2man libtool-bin libncurses5-dev libssl-dev make patch python3 python3-pip texinfo unzip wget xz-utils gcc g++ git cmake crossbuild-essential-arm64
 
       - name: Clone and Bootstrap Espressif Crosstool-NG
         run: |
@@ -40,60 +38,33 @@ jobs:
       - name: Configure and Run Canadian Cross Build
         run: |
           cd crosstool-NG
-          
-          # Initialize base ESP32 hardware configurations
           ./ct-ng xtensa-esp32-elf
-          
-          # Extract structural NDK toolchain and sysroot paths
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           SYSROOT_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          
-          # Create a perfectly structured configuration override fragment.
-          # We define the NDK compilers directly within internal CT_HOST variables
-          # instead of forcing global exports, bypassing the 'Don't set CC' crash.
-          cat > android.config << EOF
-          CT_REALLY_BE_EXPERIMENTAL=y
-          CT_CANADIAN=y
-          CT_HOST="aarch64-linux-android23"
-          CT_HOST_SYSROOT="$SYSROOT_PATH"
-          CT_OMIT_TARGET_SUPPORT=y
-          CT_HOST_CC="$TOOLCHAIN_BIN/aarch64-linux-android23-clang"
-          CT_HOST_CXX="$TOOLCHAIN_BIN/aarch64-linux-android23-clang++"
-          CT_HOST_AR="$TOOLCHAIN_BIN/llvm-ar"
-          CT_HOST_RANLIB="$TOOLCHAIN_BIN/llvm-ranlib"
-          CT_HOST_STRIP="$TOOLCHAIN_BIN/llvm-strip"
-          EOF
-          
-          # Merge overrides safely into active configuration state
-          cat android.config >> .config
-          
-          # Force resolution of nested tool dependencies
+          mkdir -p wrapper_bin
+          ln -s "$TOOLCHAIN_BIN/llvm-ar" "wrapper_bin/aarch64-linux-android23-ar"
+          ln -s "$TOOLCHAIN_BIN/llvm-ranlib" "wrapper_bin/aarch64-linux-android23-ranlib"
+          ln -s "$TOOLCHAIN_BIN/llvm-strip" "wrapper_bin/aarch64-linux-android23-strip"
+          ln -s "$TOOLCHAIN_BIN/llvm-objcopy" "wrapper_bin/aarch64-linux-android23-objcopy"
+          ln -s "$TOOLCHAIN_BIN/llvm-objdump" "wrapper_bin/aarch64-linux-android23-objdump"
+          ln -s "$TOOLCHAIN_BIN/llvm-readelf" "wrapper_bin/aarch64-linux-android23-readelf"
+          export PATH="$PWD/wrapper_bin:$TOOLCHAIN_BIN:$PATH"
+          echo "CT_REALLY_BE_EXPERIMENTAL=y" >> .config
+          echo "CT_CANADIAN=y" >> .config
+          echo "CT_HOST=\"aarch64-linux-android23\"" >> .config
+          echo "CT_HOST_SYSROOT=\"$SYSROOT_PATH\"" >> .config
+          echo "CT_OMIT_TARGET_SUPPORT=y" >> .config
+          echo "CT_HOST_CC=\"aarch64-linux-android23-clang\"" >> .config
+          echo "CT_HOST_CXX=\"aarch64-linux-android23-clang++\"" >> .config
           ./ct-ng olddefconfig
-          
-          # Run the build cleanly without global environment compilation blocks
-          ./ct-ng build.$(nproc) || {
-            echo "=== BUILD FAILED ==="
-            echo "Showing last 200 lines of build.log:"
-            tail -n 200 build.log
-            exit 1
-          }
+          ./ct-ng build.$(nproc)
 
       - name: Package Toolchain Artifacts
         run: |
           mkdir -p ${{ github.workspace }}/output
-          
           TARGET_DIR=$(find ${HOME}/x-tools -maxdepth 3 -name "xtensa-esp32-elf" -type d | head -n 1)
-          
-          if [ -z "$TARGET_DIR" ]; then
-            echo "Error: Could not find compiled xtensa-esp32-elf directory!"
-            find ${HOME}/x-tools
-            exit 1
-          fi
-          
-          echo "Packaging toolchain from: $TARGET_DIR"
           cp -r "$TARGET_DIR" ${{ github.workspace }}/output/
-          
           cd ${{ github.workspace }}/output
           tar -czvf ../toolchain-android-arm64.tar.gz xtensa-esp32-elf/
 
