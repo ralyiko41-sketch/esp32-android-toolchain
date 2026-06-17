@@ -42,6 +42,7 @@ jobs:
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           SYSROOT_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
           mkdir -p wrapper_bin
           ln -s "$TOOLCHAIN_BIN/llvm-ar" "wrapper_bin/aarch64-linux-android23-ar"
           ln -s "$TOOLCHAIN_BIN/llvm-ranlib" "wrapper_bin/aarch64-linux-android23-ranlib"
@@ -49,6 +50,15 @@ jobs:
           ln -s "$TOOLCHAIN_BIN/llvm-objcopy" "wrapper_bin/aarch64-linux-android23-objcopy"
           ln -s "$TOOLCHAIN_BIN/llvm-objdump" "wrapper_bin/aarch64-linux-android23-objdump"
           ln -s "$TOOLCHAIN_BIN/llvm-readelf" "wrapper_bin/aarch64-linux-android23-readelf"
+          
+          # THE COMPREHENSIVE FIX: Adding the Assembler, Linker, and Info tools 
+          # so crosstool-NG stops failing its sanity checks.
+          ln -s "$TOOLCHAIN_BIN/aarch64-linux-android23-clang" "wrapper_bin/aarch64-linux-android23-as"
+          ln -s "$TOOLCHAIN_BIN/ld.lld" "wrapper_bin/aarch64-linux-android23-ld"
+          ln -s "$TOOLCHAIN_BIN/llvm-nm" "wrapper_bin/aarch64-linux-android23-nm"
+          ln -s "$TOOLCHAIN_BIN/llvm-size" "wrapper_bin/aarch64-linux-android23-size"
+          ln -s "$TOOLCHAIN_BIN/llvm-strings" "wrapper_bin/aarch64-linux-android23-strings"
+          
           export PATH="$PWD/wrapper_bin:$TOOLCHAIN_BIN:$PATH"
           echo "CT_REALLY_BE_EXPERIMENTAL=y" >> .config
           echo "CT_CANADIAN=y" >> .config
@@ -59,8 +69,6 @@ jobs:
           echo "CT_HOST_CXX=\"aarch64-linux-android23-clang++\"" >> .config
           ./ct-ng olddefconfig
           
-          # THE FIX: Wipe out GitHub's default environment variables
-          # so crosstool-NG doesn't panic and abort during sanity checks.
           unset LD_LIBRARY_PATH
           unset LIBRARY_PATH
           unset CFLAGS
