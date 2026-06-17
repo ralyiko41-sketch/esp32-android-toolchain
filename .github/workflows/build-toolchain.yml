@@ -58,6 +58,15 @@ jobs:
           echo "CT_HOST_CC=\"aarch64-linux-android23-clang\"" >> .config
           echo "CT_HOST_CXX=\"aarch64-linux-android23-clang++\"" >> .config
           ./ct-ng olddefconfig
+          
+          # THE FIX: Wipe out GitHub's default environment variables
+          # so crosstool-NG doesn't panic and abort during sanity checks.
+          unset LD_LIBRARY_PATH
+          unset LIBRARY_PATH
+          unset CFLAGS
+          unset CXXFLAGS
+          unset LDFLAGS
+          
           ./ct-ng build.$(nproc)
 
       - name: Package Toolchain Artifacts
