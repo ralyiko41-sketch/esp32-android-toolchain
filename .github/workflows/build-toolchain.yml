@@ -6,14 +6,9 @@ on:
     branches: [ main ]
 
 env:
-  # ═══════════════════════════════════════════════════════════════
-  # FIXED: Use the actual existing tags "esp-2021r2"
-  # The final folder name will still be "esp-2021r2-patch5"
-  # because we set PREFIX to that.
-  # ═══════════════════════════════════════════════════════════════
   ESP_GCC_TAG:      "esp-2021r2"
   ESP_BINUTILS_TAG: "esp-2021r2"
-  NEWLIB_VERSION:   "4.1.0"          # This version exists on sourceware.org
+  NEWLIB_VERSION:   "4.1.0"
 
   NDK_VERSION:      "r26d"
   ANDROID_API:      "21"
@@ -25,9 +20,6 @@ env:
   LLVM_BIN:         "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
   WRAP:             "${{ github.workspace }}/ndk-wrap"
   WORK:             "${{ github.workspace }}/work"
-
-  # This creates the exact folder structure your app expects:
-  # esp-2021r2-patch5/xtensa-esp-elf/bin/...
   PREFIX:           "${{ github.workspace }}/staging/esp-2021r2-patch5/xtensa-esp-elf"
 
 jobs:
@@ -38,9 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── FIXED: Removed -qq so you can see progress ──
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             autoconf automake bison flex gawk \
             libgmp-dev libmpfr-dev libmpc-dev \
@@ -70,7 +63,7 @@ jobs:
         run: |
           "${LLVM_BIN}/aarch64-linux-android${ANDROID_API}-clang" --version | head -1
 
-      # ── Download sources (now using codeload.github.com) ──────────
+      # ── Download sources ──────────────────────────────────────────
       - name: Cache source tarballs
         id: cache-src
         uses: actions/cache@v4
@@ -146,7 +139,7 @@ jobs:
           ln -sf "${LLVM_BIN}/llvm-as"                              "${WRAP}/aarch64-linux-android-as"
           ln -sf "${LLVM_BIN}/lld"                                  "${WRAP}/aarch64-linux-android-ld"
 
-      # ── Build Binutils (host=Android, target=ESP) ──────────────────
+      # ── Build Binutils ──────────────────────────────────────────────
       - name: Build Binutils
         run: |
           export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
@@ -169,7 +162,7 @@ jobs:
           make -j$(nproc)
           make install
 
-      # ── Build GCC (host=Android, target=ESP) ───────────────────────
+      # ── Build GCC ──────────────────────────────────────────────────
       - name: Build GCC
         run: |
           export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
@@ -199,7 +192,7 @@ jobs:
           make -j$(nproc) all-target-libgcc
           make install-target-libgcc
 
-      # ── Strip and verify architecture ──────────────────────────────
+      # ── Strip and verify ──────────────────────────────────────────
       - name: Strip and verify
         run: |
           "${LLVM_BIN}/llvm-strip" --strip-unneeded \
@@ -208,7 +201,7 @@ jobs:
           file "${PREFIX}/bin/xtensa-esp-elf-gcc"
           echo "✅ Binary is AARCH64 (will run on Samsung A20)"
 
-      # ── Package: the tar will have esp-2021r2-patch5 as top folder ──
+      # ── Package ────────────────────────────────────────────────────
       - name: Package toolchain
         run: |
           cd "${GITHUB_WORKSPACE}/staging"
