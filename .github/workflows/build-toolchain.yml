@@ -1,93 +1,321 @@
-name: Build ESP32 Android Toolchain
+name: Build ESP32 Toolchain for Android ARM64
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-toolchain.yml'
+
+# ══════════════════════════════════════════════════════════════════════════
+# CANADIAN CROSS — build GCC directly (no crosstool-NG)
+#
+#   Build  : x86_64-linux-gnu        (GitHub Actions runner)
+#   Host   : aarch64-linux-android21 (your Android phone)
+#   Target : xtensa-esp-elf          (ESP32 chip)
+#
+# We use Android NDK r26d clang as the HOST compiler so every output
+# binary is linked against Android Bionic (not glibc).
+# ══════════════════════════════════════════════════════════════════════════
 
 jobs:
   build-toolchain:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
+    env:
+      # ── versions ──────────────────────────────────────────────────────
+      NDK_VERSION:      r26d
+      BINUTILS_VERSION: "2.40"
+      GCC_VERSION:      "12.3.0"
+      NEWLIB_VERSION:   "4.3.0.20230317"
+
+      # ── Android target ────────────────────────────────────────────────
+      ANDROID_API:      "21"
+      HOST_TRIPLE:      "aarch64-linux-android"
+      HOST_API_TRIPLE:  "aarch64-linux-android21"
+
+      # ── toolchain target ──────────────────────────────────────────────
+      TARGET:           "xtensa-esp-elf"
+
+      # ── paths ─────────────────────────────────────────────────────────
+      NDK_HOME:         "${{ github.workspace }}/ndk"
+      WORK:             "${{ github.workspace }}/work"
+      SYSROOT_HOST:     "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+      LLVM_BIN:         "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+      INSTALL_PREFIX:   "${{ github.workspace }}/toolchain-out"
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      # ── 0. Checkout ───────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
 
-      - name: Setup Android NDK r26b
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
+      # ── 1. Host tools ─────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake bison flex gawk libgmp-dev libmpfr-dev \
+            libmpc-dev libssl-dev libtool make patch python3 texinfo \
+            unzip wget xz-utils zlib1g-dev
+
+      # ── 2. NDK ────────────────────────────────────────────────────────────
+      - name: Cache NDK
+        id: cache-ndk
+        uses: actions/cache@v4
         with:
-          ndk-version: 'r26b'
+          path: ${{ env.NDK_HOME }}
+          key: ndk-${{ env.NDK_VERSION }}
 
-      - name: Install System Dependencies
+      - name: Download NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y autoconf automake bison flex gawk help2man libtool-bin libncurses5-dev libssl-dev make patch python3 python3-pip texinfo unzip wget xz-utils gcc g++ git cmake crossbuild-essential-arm64
+          wget -q "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" \
+            -O /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /tmp
+          mv "/tmp/android-ndk-${NDK_VERSION}" "${NDK_HOME}"
 
-      - name: Clone and Bootstrap Espressif Crosstool-NG
+      - name: Verify NDK clang
         run: |
-          git clone --recursive https://github.com/espressif/crosstool-NG.git
-          cd crosstool-NG
-          git checkout esp-13.2.0_20240530
-          ./bootstrap
-          ./configure --enable-local
+          "${LLVM_BIN}/aarch64-linux-android21-clang" --version
+          echo "LLVM_BIN=${LLVM_BIN}" >> $GITHUB_ENV
+
+      # ── 3. Source tarballs ────────────────────────────────────────────────
+      - name: Cache source tarballs
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/tarballs
+          key: src-binutils-${{ env.BINUTILS_VERSION }}-gcc-${{ env.GCC_VERSION }}-newlib-${{ env.NEWLIB_VERSION }}
+
+      - name: Download source tarballs
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/tarballs"
+          cd "${GITHUB_WORKSPACE}/tarballs"
+          
+          dl() {
+            local file="$1" url="$2"
+            if [ ! -f "$file" ]; then
+              echo "Downloading $file..."
+              wget -q "$url" -O "$file"
+            else
+              echo "Cached: $file"
+            fi
+          }
+          
+          dl "binutils-${BINUTILS_VERSION}.tar.xz" \
+            "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.xz"
+          
+          dl "gcc-${GCC_VERSION}.tar.xz" \
+            "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"
+          
+          dl "newlib-${NEWLIB_VERSION}.tar.gz" \
+            "ftp://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz"
+          
+          ls -lh .
+
+      # ── 4. Extract sources ────────────────────────────────────────────────
+      - name: Extract sources
+        run: |
+          mkdir -p "${WORK}/src"
+          cd "${WORK}/src"
+          
+          echo "Extracting binutils..."
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/binutils-${BINUTILS_VERSION}.tar.xz"
+          
+          echo "Extracting GCC..."
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/gcc-${GCC_VERSION}.tar.xz"
+          
+          echo "Extracting newlib..."
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/newlib-${NEWLIB_VERSION}.tar.gz"
+          
+          # Symlink newlib into GCC source tree (standard practice)
+          ln -s "${WORK}/src/newlib-${NEWLIB_VERSION}/newlib" \
+                "${WORK}/src/gcc-${GCC_VERSION}/newlib"
+          ln -s "${WORK}/src/newlib-${NEWLIB_VERSION}/libgloss" \
+                "${WORK}/src/gcc-${GCC_VERSION}/libgloss"
+          
+          # Download GCC prerequisites (gmp, mpfr, mpc) into gcc source
+          cd "${WORK}/src/gcc-${GCC_VERSION}"
+          ./contrib/download_prerequisites
+          
+          echo "Sources ready."
+
+      # ── 5. Setup NDK clang wrappers ───────────────────────────────────────
+      # CT-NG and GCC configure scripts call the compiler as
+      # "aarch64-linux-android-gcc". The NDK ships clang wrappers named
+      # "aarch64-linux-android21-clang". We create symlinks so configure
+      # finds the right tool under the expected name.
+      - name: Create NDK compiler wrappers
+        run: |
+          WRAP="${GITHUB_WORKSPACE}/ndk-wrappers"
+          mkdir -p "${WRAP}"
+          
+          # Clang wrapper → gcc-named symlink
+          ln -sf "${LLVM_BIN}/aarch64-linux-android21-clang"   "${WRAP}/aarch64-linux-android-gcc"
+          ln -sf "${LLVM_BIN}/aarch64-linux-android21-clang++" "${WRAP}/aarch64-linux-android-g++"
+          ln -sf "${LLVM_BIN}/llvm-ar"                          "${WRAP}/aarch64-linux-android-ar"
+          ln -sf "${LLVM_BIN}/llvm-ranlib"                      "${WRAP}/aarch64-linux-android-ranlib"
+          ln -sf "${LLVM_BIN}/llvm-strip"                       "${WRAP}/aarch64-linux-android-strip"
+          ln -sf "${LLVM_BIN}/llvm-nm"                          "${WRAP}/aarch64-linux-android-nm"
+          ln -sf "${LLVM_BIN}/llvm-objcopy"                     "${WRAP}/aarch64-linux-android-objcopy"
+          ln -sf "${LLVM_BIN}/llvm-objdump"                     "${WRAP}/aarch64-linux-android-objdump"
+          
+          # Also add the LLVM bin dir itself (for lld, etc.)
+          echo "NDK_WRAP=${WRAP}" >> $GITHUB_ENV
+          
+          echo "Wrappers:"
+          ls -la "${WRAP}/"
+
+      # ── 6. Stage 1 — Build Binutils (host = Android ARM64) ───────────────
+      - name: Build Binutils for Android host
+        run: |
+          mkdir -p "${WORK}/build-binutils"
+          cd "${WORK}/build-binutils"
+          
+          export PATH="${NDK_WRAP}:${LLVM_BIN}:${PATH}"
+          
+          "${WORK}/src/binutils-${BINUTILS_VERSION}/configure" \
+            --build=x86_64-linux-gnu \
+            --host=aarch64-linux-android \
+            --target="${TARGET}" \
+            --prefix="${INSTALL_PREFIX}" \
+            --with-sysroot \
+            --disable-nls \
+            --disable-werror \
+            --disable-sim \
+            --disable-gdb \
+            --enable-plugins \
+            --enable-lto \
+            CC="aarch64-linux-android-gcc" \
+            CXX="aarch64-linux-android-g++" \
+            AR="llvm-ar" \
+            RANLIB="llvm-ranlib" \
+            CFLAGS="-O2" \
+            CXXFLAGS="-O2"
+          
           make -j$(nproc)
+          make install
+          echo "✓ Binutils built"
 
-      - name: Configure and Run Canadian Cross Build
+      # ── 7. Stage 2 — Build GCC (bootstrap, host = Android ARM64) ─────────
+      - name: Build GCC for Android host
         run: |
-          cd crosstool-NG
-          ./ct-ng xtensa-esp32-elf
-          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
-          TOOLCHAIN_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          SYSROOT_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          mkdir -p "${WORK}/build-gcc"
+          cd "${WORK}/build-gcc"
           
-          mkdir -p wrapper_bin
-          ln -s "$TOOLCHAIN_BIN/llvm-ar" "wrapper_bin/aarch64-linux-android23-ar"
-          ln -s "$TOOLCHAIN_BIN/llvm-ranlib" "wrapper_bin/aarch64-linux-android23-ranlib"
-          ln -s "$TOOLCHAIN_BIN/llvm-strip" "wrapper_bin/aarch64-linux-android23-strip"
-          ln -s "$TOOLCHAIN_BIN/llvm-objcopy" "wrapper_bin/aarch64-linux-android23-objcopy"
-          ln -s "$TOOLCHAIN_BIN/llvm-objdump" "wrapper_bin/aarch64-linux-android23-objdump"
-          ln -s "$TOOLCHAIN_BIN/llvm-readelf" "wrapper_bin/aarch64-linux-android23-readelf"
+          export PATH="${INSTALL_PREFIX}/bin:${NDK_WRAP}:${LLVM_BIN}:${PATH}"
           
-          # THE COMPREHENSIVE FIX: Adding the Assembler, Linker, and Info tools 
-          # so crosstool-NG stops failing its sanity checks.
-          ln -s "$TOOLCHAIN_BIN/aarch64-linux-android23-clang" "wrapper_bin/aarch64-linux-android23-as"
-          ln -s "$TOOLCHAIN_BIN/ld.lld" "wrapper_bin/aarch64-linux-android23-ld"
-          ln -s "$TOOLCHAIN_BIN/llvm-nm" "wrapper_bin/aarch64-linux-android23-nm"
-          ln -s "$TOOLCHAIN_BIN/llvm-size" "wrapper_bin/aarch64-linux-android23-size"
-          ln -s "$TOOLCHAIN_BIN/llvm-strings" "wrapper_bin/aarch64-linux-android23-strings"
+          "${WORK}/src/gcc-${GCC_VERSION}/configure" \
+            --build=x86_64-linux-gnu \
+            --host=aarch64-linux-android \
+            --target="${TARGET}" \
+            --prefix="${INSTALL_PREFIX}" \
+            --with-newlib \
+            --with-headers="${WORK}/src/newlib-${NEWLIB_VERSION}/newlib/libc/include" \
+            --without-headers \
+            --enable-languages=c,c++ \
+            --disable-shared \
+            --disable-threads \
+            --disable-libssp \
+            --disable-libquadmath \
+            --disable-libgomp \
+            --disable-libvtv \
+            --disable-libada \
+            --disable-nls \
+            --disable-werror \
+            --disable-multilib \
+            --with-gnu-as \
+            --with-gnu-ld \
+            CC="aarch64-linux-android-gcc" \
+            CXX="aarch64-linux-android-g++" \
+            AR="llvm-ar" \
+            RANLIB="llvm-ranlib" \
+            CFLAGS="-O2" \
+            CXXFLAGS="-O2"
           
-          export PATH="$PWD/wrapper_bin:$TOOLCHAIN_BIN:$PATH"
-          echo "CT_REALLY_BE_EXPERIMENTAL=y" >> .config
-          echo "CT_CANADIAN=y" >> .config
-          echo "CT_HOST=\"aarch64-linux-android23\"" >> .config
-          echo "CT_HOST_SYSROOT=\"$SYSROOT_PATH\"" >> .config
-          echo "CT_OMIT_TARGET_SUPPORT=y" >> .config
-          echo "CT_HOST_CC=\"aarch64-linux-android23-clang\"" >> .config
-          echo "CT_HOST_CXX=\"aarch64-linux-android23-clang++\"" >> .config
-          ./ct-ng olddefconfig
+          # all-gcc builds only the compiler driver (not runtime libs)
+          # This is the standard approach for a cross-compiler targeting bare metal
+          make -j$(nproc) all-gcc
+          make install-gcc
           
-          unset LD_LIBRARY_PATH
-          unset LIBRARY_PATH
-          unset CFLAGS
-          unset CXXFLAGS
-          unset LDFLAGS
+          # Now build and install target runtime (libgcc for ESP32)
+          make -j$(nproc) all-target-libgcc
+          make install-target-libgcc
           
-          ./ct-ng build.$(nproc)
+          echo "✓ GCC built"
 
-      - name: Package Toolchain Artifacts
+      # ── 8. Verify output ──────────────────────────────────────────────────
+      - name: Verify toolchain binaries
         run: |
-          mkdir -p ${{ github.workspace }}/output
-          TARGET_DIR=$(find ${HOME}/x-tools -maxdepth 3 -name "xtensa-esp32-elf" -type d | head -n 1)
-          cp -r "$TARGET_DIR" ${{ github.workspace }}/output/
-          cd ${{ github.workspace }}/output
-          tar -czvf ../toolchain-android-arm64.tar.gz xtensa-esp32-elf/
+          echo "=== bin/ contents ==="
+          ls -lh "${INSTALL_PREFIX}/bin/" | grep xtensa
+          
+          GCC="${INSTALL_PREFIX}/bin/xtensa-esp-elf-gcc"
+          GPP="${INSTALL_PREFIX}/bin/xtensa-esp-elf-g++"
+          
+          echo ""
+          echo "=== file type ==="
+          file "${GCC}"
+          file "${GPP}"
+          
+          echo ""
+          echo "=== ELF header (e_machine byte 19 = 0xB7 means AArch64) ==="
+          python3 -c "
+          import struct, sys
+          with open('${GCC}', 'rb') as f:
+              data = f.read(20)
+          magic = data[:4]
+          e_machine = struct.unpack_from('<H', data, 18)[0]
+          print(f'Magic: {magic}')
+          print(f'e_machine: 0x{e_machine:04X}  (AArch64=0x00B7, x86_64=0x003E)')
+          ok = e_machine == 0x00B7
+          print('PASS: Android ARM64 binary' if ok else 'FAIL: Wrong architecture!')
+          sys.exit(0 if ok else 1)
+          "
+          
+          echo ""
+          echo "=== Size ==="
+          du -sh "${INSTALL_PREFIX}"
 
-      - name: Upload Finished Artifact
+      # ── 9. Package ────────────────────────────────────────────────────────
+      - name: Package toolchain
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          tar -czf toolchain-android-arm64.tar.gz \
+            -C "$(dirname "${INSTALL_PREFIX}")" \
+            "$(basename "${INSTALL_PREFIX}")"
+          sha256sum toolchain-android-arm64.tar.gz \
+            > toolchain-android-arm64.tar.gz.sha256
+          ls -lh toolchain-android-arm64.tar.gz
+          cat toolchain-android-arm64.tar.gz.sha256
+
+      # ── 10. Upload ────────────────────────────────────────────────────────
+      - name: Upload toolchain artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-android-toolchain-arm64
-          path: toolchain-android-arm64.tar.gz
+          name: toolchain-android-arm64
+          path: |
+            toolchain-android-arm64.tar.gz
+            toolchain-android-arm64.tar.gz.sha256
           retention-days: 30
+
+      # ── 11. GitHub Release on tag ─────────────────────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            toolchain-android-arm64.tar.gz
+            toolchain-android-arm64.tar.gz.sha256
+          body: |
+            ## ESP32 Android ARM64 Toolchain
+            
+            Canadian Cross compiled — runs on Android, compiles for ESP32.
+            
+            | | |
+            |---|---|
+            | **Host** | aarch64-linux-android21 (Bionic libc) |
+            | **Target** | xtensa-esp-elf |
+            | **GCC** | ${{ env.GCC_VERSION }} |
+            | **Binutils** | ${{ env.BINUTILS_VERSION }} |
+            | **Newlib** | ${{ env.NEWLIB_VERSION }} |
+            | **NDK** | ${{ env.NDK_VERSION }} |
