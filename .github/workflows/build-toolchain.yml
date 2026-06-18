@@ -7,12 +7,13 @@ on:
 
 env:
   # ═══════════════════════════════════════════════════════════════
-  # FIX 1: Use the EXACT tag that matches your app's hardcoded
-  #        "esp-2021r2-patch5" folder name (GCC 8.4.0)
+  # FIXED: Use the actual existing tags "esp-2021r2"
+  # The final folder name will still be "esp-2021r2-patch5"
+  # because we set PREFIX to that.
   # ═══════════════════════════════════════════════════════════════
-  ESP_GCC_TAG:      "esp-2021r2-patch5"
-  ESP_BINUTILS_TAG: "esp-2021r2-patch5"
-  NEWLIB_VERSION:   "4.1.0"   # This version exists and matches that era
+  ESP_GCC_TAG:      "esp-2021r2"
+  ESP_BINUTILS_TAG: "esp-2021r2"
+  NEWLIB_VERSION:   "4.1.0"          # This version exists on sourceware.org
 
   NDK_VERSION:      "r26d"
   ANDROID_API:      "21"
@@ -25,11 +26,8 @@ env:
   WRAP:             "${{ github.workspace }}/ndk-wrap"
   WORK:             "${{ github.workspace }}/work"
 
-  # ═══════════════════════════════════════════════════════════════
-  # FIX 2: The PREFIX creates the EXACT folder structure your
-  #        ArduinoCompiler.kt expects:
-  #        esp-2021r2-patch5/xtensa-esp-elf/bin/...
-  # ═══════════════════════════════════════════════════════════════
+  # This creates the exact folder structure your app expects:
+  # esp-2021r2-patch5/xtensa-esp-elf/bin/...
   PREFIX:           "${{ github.workspace }}/staging/esp-2021r2-patch5/xtensa-esp-elf"
 
 jobs:
@@ -50,7 +48,7 @@ jobs:
             python3 texinfo unzip wget xz-utils \
             zlib1g-dev build-essential
 
-      # ── NDK Caching ────────────────────────────────────────────────
+      # ── NDK ──────────────────────────────────────────────────────────
       - name: Cache NDK
         id: cache-ndk
         uses: actions/cache@v4
@@ -72,7 +70,7 @@ jobs:
         run: |
           "${LLVM_BIN}/aarch64-linux-android${ANDROID_API}-clang" --version | head -1
 
-      # ── Download Sources (WITH RETRIES to avoid exit code 8) ──────
+      # ── Download sources (now using codeload.github.com) ──────────
       - name: Cache source tarballs
         id: cache-src
         uses: actions/cache@v4
@@ -85,39 +83,38 @@ jobs:
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/tarballs"
           cd "${GITHUB_WORKSPACE}/tarballs"
-          
-          # FIX 3: Added --retry and --timeout to stop random network failures (exit code 8)
+
           echo "--- Downloading Espressif GCC (${ESP_GCC_TAG}) ---"
           wget --retry-connrefused --tries=5 --timeout=30 --progress=dot:mega \
-            "https://github.com/espressif/gcc/archive/refs/tags/${ESP_GCC_TAG}.tar.gz" \
+            "https://codeload.github.com/espressif/gcc/tar.gz/refs/tags/${ESP_GCC_TAG}" \
             -O "esp-gcc.tar.gz"
-          
+
           echo "--- Downloading Espressif Binutils (${ESP_BINUTILS_TAG}) ---"
           wget --retry-connrefused --tries=5 --timeout=30 --progress=dot:mega \
-            "https://github.com/espressif/binutils-gdb/archive/refs/tags/${ESP_BINUTILS_TAG}.tar.gz" \
+            "https://codeload.github.com/espressif/binutils-gdb/tar.gz/refs/tags/${ESP_BINUTILS_TAG}" \
             -O "esp-binutils.tar.gz"
-          
+
           echo "--- Downloading Newlib (${NEWLIB_VERSION}) ---"
           wget --retry-connrefused --tries=5 --timeout=30 --progress=dot:mega \
             "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" \
             -O "newlib.tar.gz"
-          
+
           ls -lh .
 
-      # ── Extract ────────────────────────────────────────────────────
+      # ── Extract ──────────────────────────────────────────────────────
       - name: Extract sources
         run: |
           mkdir -p "${WORK}/src"
           cd "${WORK}/src"
-          
+
           tar -xf "${GITHUB_WORKSPACE}/tarballs/esp-binutils.tar.gz"
           BINUTILS_DIR=$(ls -d binutils-gdb-* 2>/dev/null | head -1)
           echo "BINUTILS_DIR=${WORK}/src/${BINUTILS_DIR}" >> $GITHUB_ENV
-          
+
           tar -xf "${GITHUB_WORKSPACE}/tarballs/esp-gcc.tar.gz"
           GCC_DIR=$(ls -d gcc-* 2>/dev/null | head -1)
           echo "GCC_DIR=${WORK}/src/${GCC_DIR}" >> $GITHUB_ENV
-          
+
           tar -xf "${GITHUB_WORKSPACE}/tarballs/newlib.tar.gz"
           NEWLIB_DIR=$(ls -d newlib-* 2>/dev/null | head -1)
           echo "NEWLIB_DIR=${WORK}/src/${NEWLIB_DIR}" >> $GITHUB_ENV
@@ -132,12 +129,12 @@ jobs:
           ln -sf "${NEWLIB_DIR}/newlib"  "${GCC_DIR}/newlib"
           ln -sf "${NEWLIB_DIR}/libgloss" "${GCC_DIR}/libgloss"
 
-      # ── NDK Wrappers ──────────────────────────────────────────────
+      # ── NDK wrappers ────────────────────────────────────────────────
       - name: Create NDK compiler wrappers
         run: |
           mkdir -p "${WRAP}"
           API="${ANDROID_API}"
-          
+
           ln -sf "${LLVM_BIN}/aarch64-linux-android${API}-clang"   "${WRAP}/aarch64-linux-android-gcc"
           ln -sf "${LLVM_BIN}/aarch64-linux-android${API}-clang++" "${WRAP}/aarch64-linux-android-g++"
           ln -sf "${LLVM_BIN}/llvm-ar"                              "${WRAP}/aarch64-linux-android-ar"
@@ -149,13 +146,13 @@ jobs:
           ln -sf "${LLVM_BIN}/llvm-as"                              "${WRAP}/aarch64-linux-android-as"
           ln -sf "${LLVM_BIN}/lld"                                  "${WRAP}/aarch64-linux-android-ld"
 
-      # ── Build Binutils (Host=Android, Target=ESP) ────────────────
+      # ── Build Binutils (host=Android, target=ESP) ──────────────────
       - name: Build Binutils
         run: |
           export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-binutils"
           cd "${WORK}/build-binutils"
-          
+
           "${BINUTILS_DIR}/configure" \
             --build=x86_64-linux-gnu \
             --host="${HOST_TRIPLE}" \
@@ -168,17 +165,17 @@ jobs:
             AR="${LLVM_BIN}/llvm-ar" \
             RANLIB="${LLVM_BIN}/llvm-ranlib" \
             STRIP="${LLVM_BIN}/llvm-strip"
-          
+
           make -j$(nproc)
           make install
 
-      # ── Build GCC (Host=Android, Target=ESP) ──────────────────────
+      # ── Build GCC (host=Android, target=ESP) ───────────────────────
       - name: Build GCC
         run: |
           export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-gcc"
           cd "${WORK}/build-gcc"
-          
+
           "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
             --host="${HOST_TRIPLE}" \
@@ -195,33 +192,29 @@ jobs:
             AR="${LLVM_BIN}/llvm-ar" \
             RANLIB="${LLVM_BIN}/llvm-ranlib" \
             STRIP="${LLVM_BIN}/llvm-strip"
-          
+
           make -j$(nproc) all-gcc
           make install-gcc
-          
+
           make -j$(nproc) all-target-libgcc
           make install-target-libgcc
 
-      # ── Strip & Verify (Must be AARCH64) ─────────────────────────
-      - name: Strip and Verify
+      # ── Strip and verify architecture ──────────────────────────────
+      - name: Strip and verify
         run: |
           "${LLVM_BIN}/llvm-strip" --strip-unneeded \
             "${PREFIX}"/bin/xtensa-esp-elf-* 2>/dev/null || true
-          
-          # Check if it's truly Android AARCH64 (e_machine 0x00B7)
+
           file "${PREFIX}/bin/xtensa-esp-elf-gcc"
           echo "✅ Binary is AARCH64 (will run on Samsung A20)"
 
-      # ── FIX 4: Package EXACTLY as the app expects ────────────────
+      # ── Package: the tar will have esp-2021r2-patch5 as top folder ──
       - name: Package toolchain
         run: |
-          # The staging folder already has esp-2021r2-patch5/xtensa-esp-elf
           cd "${GITHUB_WORKSPACE}/staging"
           tar -czf "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" "esp-2021r2-patch5"
-          
           sha256sum "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
             > "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
-          
           ls -lh "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz"
 
       - name: Upload artifact
