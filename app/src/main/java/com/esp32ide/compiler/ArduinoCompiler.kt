@@ -76,8 +76,8 @@ class ArduinoCompiler(private val context: Context) {
     private val ALL_TOOLS = listOf(
         ToolDef(
             name = "xtensa-esp32-elf",
-            version = "android-arm64",
-            url = "https://github.com/esp32ide/ESP32IDE-Android/releases/download/toolchain/toolchain-android-arm64.tar.gz",
+            version = "esp-2021r2-patch5",
+            url = "https://github.com/espressif/crosstool-NG/releases/download/esp-2021r2-patch5/xtensa-esp32-elf-gcc8_4_0-esp-2021r2-patch5-linux-arm64.tar.gz",
             destSubPath = "xtensa-esp32-elf/esp-2021r2-patch5",
             minSizeBytes = 50_000_000L
         ),
@@ -204,7 +204,7 @@ class ArduinoCompiler(private val context: Context) {
                     continue
                 }
 
-                onProgress("[${index + 1}/${ALL_TOOLS.size}] Downloading ${tool.name} (Android-native)...")
+                onProgress("[${index + 1}/${ALL_TOOLS.size}] Downloading ${tool.name}...")
                 val ext = if (tool.isZip) "zip" else "tar.gz"
                 val toolFile = File(stagingFolder, "${tool.name}.$ext")
 
@@ -238,7 +238,7 @@ class ArduinoCompiler(private val context: Context) {
 
                 // Write marker so we skip next time
                 markerFile.writeText("installed")
-                onProgress("✓ ${tool.name} ready (Android-native)")
+                onProgress("✓ ${tool.name} ready")
 
                 // Clean up staging file to save space
                 toolFile.delete()
@@ -516,21 +516,12 @@ sketch:
         return config.absolutePath
     }
 
-    private fun extractTarGz(tarGz: File, destDir: File, onProgress: (String) -> Unit) {
-        extractTarGzInternal(tarGz, destDir, onProgress, stripRoot = true)
-    }
-
     private fun extractTarGzAndroid(tarGz: File, destDir: File, onProgress: (String) -> Unit) {
-        // Same extraction logic - strips root directory
-        extractTarGzInternal(tarGz, destDir, onProgress, stripRoot = true)
-    }
-
-    private fun extractTarGzInternal(tarGz: File, destDir: File, onProgress: (String) -> Unit, stripRoot: Boolean) {
         var count = 0
         TarArchiveInputStream(GzipCompressorInputStream(BufferedInputStream(FileInputStream(tarGz)))).use { tar ->
             var entry = tar.nextTarEntry
             while (entry != null) {
-                val name = if (stripRoot) entry.name.substringAfter("/") else entry.name
+                val name = entry.name.substringAfter("/")
                 if (name.isNotEmpty()) {
                     val outFile = File(destDir, name)
                     if (entry.isDirectory) { outFile.mkdirs() } else {
