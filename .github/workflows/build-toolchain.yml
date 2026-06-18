@@ -7,7 +7,7 @@ on:
 
 env:
   ESP_GCC_TAG:      "esp-2021r2"
-  ESP_BINUTILS_TAG: "esp-2021r2"
+  ESP_BINUTILS_TAG: "esp-2021r2-patch5"
   NEWLIB_VERSION:   "4.1.0"
 
   NDK_VERSION:      "r26d"
@@ -30,7 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── FIXED: Removed -qq so you can see progress ──
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -41,7 +40,6 @@ jobs:
             python3 texinfo unzip wget xz-utils \
             zlib1g-dev build-essential
 
-      # ── NDK ──────────────────────────────────────────────────────────
       - name: Cache NDK
         id: cache-ndk
         uses: actions/cache@v4
@@ -63,7 +61,6 @@ jobs:
         run: |
           "${LLVM_BIN}/aarch64-linux-android${ANDROID_API}-clang" --version | head -1
 
-      # ── Download sources ──────────────────────────────────────────
       - name: Cache source tarballs
         id: cache-src
         uses: actions/cache@v4
@@ -94,7 +91,6 @@ jobs:
 
           ls -lh .
 
-      # ── Extract ──────────────────────────────────────────────────────
       - name: Extract sources
         run: |
           mkdir -p "${WORK}/src"
@@ -122,7 +118,6 @@ jobs:
           ln -sf "${NEWLIB_DIR}/newlib"  "${GCC_DIR}/newlib"
           ln -sf "${NEWLIB_DIR}/libgloss" "${GCC_DIR}/libgloss"
 
-      # ── NDK wrappers ────────────────────────────────────────────────
       - name: Create NDK compiler wrappers
         run: |
           mkdir -p "${WRAP}"
@@ -139,7 +134,6 @@ jobs:
           ln -sf "${LLVM_BIN}/llvm-as"                              "${WRAP}/aarch64-linux-android-as"
           ln -sf "${LLVM_BIN}/lld"                                  "${WRAP}/aarch64-linux-android-ld"
 
-      # ── Build Binutils ──────────────────────────────────────────────
       - name: Build Binutils
         run: |
           export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
@@ -162,7 +156,6 @@ jobs:
           make -j$(nproc)
           make install
 
-      # ── Build GCC ──────────────────────────────────────────────────
       - name: Build GCC
         run: |
           export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
@@ -192,7 +185,6 @@ jobs:
           make -j$(nproc) all-target-libgcc
           make install-target-libgcc
 
-      # ── Strip and verify ──────────────────────────────────────────
       - name: Strip and verify
         run: |
           "${LLVM_BIN}/llvm-strip" --strip-unneeded \
@@ -201,7 +193,6 @@ jobs:
           file "${PREFIX}/bin/xtensa-esp-elf-gcc"
           echo "✅ Binary is AARCH64 (will run on Samsung A20)"
 
-      # ── Package ────────────────────────────────────────────────────
       - name: Package toolchain
         run: |
           cd "${GITHUB_WORKSPACE}/staging"
