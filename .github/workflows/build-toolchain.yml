@@ -8,14 +8,17 @@ on:
       - '.github/workflows/build-toolchain.yml'
 
 # ══════════════════════════════════════════════════════════════════════════
-# CANADIAN CROSS — build GCC directly (no crosstool-NG)
+# Canadian Cross:
+#   Build  → x86_64-linux-gnu        (GitHub Actions runner)
+#   Host   → aarch64-linux-android21 (your Android phone, Bionic libc)
+#   Target → xtensa-esp-elf          (ESP32 chip)
 #
-#   Build  : x86_64-linux-gnu        (GitHub Actions runner)
-#   Host   : aarch64-linux-android21 (your Android phone)
-#   Target : xtensa-esp-elf          (ESP32 chip)
-#
-# We use Android NDK r26d clang as the HOST compiler so every output
-# binary is linked against Android Bionic (not glibc).
+# Sources used:
+#   GCC      → github.com/espressif/gcc   (Xtensa backend lives here, NOT upstream GCC)
+#   Binutils → github.com/espressif/binutils-gdb
+#   Newlib   → sourceware.org HTTPS (no FTP)
+#   NDK      → dl.google.com HTTPS
+# All URLs are pure HTTPS — zero FTP — runs clean on GitHub Actions.
 # ══════════════════════════════════════════════════════════════════════════
 
 jobs:
@@ -24,93 +27,112 @@ jobs:
     timeout-minutes: 360
 
     env:
-      # ── versions ──────────────────────────────────────────────────────
-      NDK_VERSION:      r26d
-      BINUTILS_VERSION: "2.40"
-      GCC_VERSION:      "12.3.0"
+      # ── Espressif fork tags (have Xtensa backend + patches) ───────────
+      # Check latest at: github.com/espressif/gcc/releases
+      ESP_GCC_TAG:      "esp-12.2.0_20230208"
+      # Check latest at: github.com/espressif/binutils-gdb/releases
+      ESP_BINUTILS_TAG: "esp-2.40.0_20230207"
+      # Newlib version matching ESP-IDF 5.x
       NEWLIB_VERSION:   "4.3.0.20230317"
 
-      # ── Android target ────────────────────────────────────────────────
+      # ── Android NDK ───────────────────────────────────────────────────
+      NDK_VERSION:      "r26d"
       ANDROID_API:      "21"
-      HOST_TRIPLE:      "aarch64-linux-android"
-      HOST_API_TRIPLE:  "aarch64-linux-android21"
 
-      # ── toolchain target ──────────────────────────────────────────────
+      # ── Triple names ──────────────────────────────────────────────────
       TARGET:           "xtensa-esp-elf"
+      HOST_TRIPLE:      "aarch64-linux-android"
 
-      # ── paths ─────────────────────────────────────────────────────────
+      # ── Paths ─────────────────────────────────────────────────────────
       NDK_HOME:         "${{ github.workspace }}/ndk"
-      WORK:             "${{ github.workspace }}/work"
-      SYSROOT_HOST:     "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
       LLVM_BIN:         "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-      INSTALL_PREFIX:   "${{ github.workspace }}/toolchain-out"
+      WRAP:             "${{ github.workspace }}/ndk-wrap"
+      WORK:             "${{ github.workspace }}/work"
+      PREFIX:           "${{ github.workspace }}/toolchain-out"
 
     steps:
       # ── 0. Checkout ───────────────────────────────────────────────────────
       - uses: actions/checkout@v4
 
-      # ── 1. Host tools ─────────────────────────────────────────────────────
+      # ── 1. Host build tools ───────────────────────────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            autoconf automake bison flex gawk libgmp-dev libmpfr-dev \
-            libmpc-dev libssl-dev libtool make patch python3 texinfo \
-            unzip wget xz-utils zlib1g-dev
+            autoconf automake bison flex gawk \
+            libgmp-dev libmpfr-dev libmpc-dev \
+            libssl-dev libtool make patch \
+            python3 texinfo unzip wget xz-utils \
+            zlib1g-dev build-essential
 
-      # ── 2. NDK ────────────────────────────────────────────────────────────
+      # ── 2. Android NDK ────────────────────────────────────────────────────
       - name: Cache NDK
         id: cache-ndk
         uses: actions/cache@v4
         with:
           path: ${{ env.NDK_HOME }}
-          key: ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-v1
 
       - name: Download NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          wget -q "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" \
+          wget -q \
+            "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" \
             -O /tmp/ndk.zip
           unzip -q /tmp/ndk.zip -d /tmp
           mv "/tmp/android-ndk-${NDK_VERSION}" "${NDK_HOME}"
+          rm /tmp/ndk.zip
 
-      - name: Verify NDK clang
+      - name: Verify NDK
         run: |
-          "${LLVM_BIN}/aarch64-linux-android21-clang" --version
-          echo "LLVM_BIN=${LLVM_BIN}" >> $GITHUB_ENV
+          "${LLVM_BIN}/aarch64-linux-android${ANDROID_API}-clang" --version | head -1
+          echo "NDK OK"
 
-      # ── 3. Source tarballs ────────────────────────────────────────────────
+      # ── 3. Download sources (ALL via HTTPS, zero FTP) ─────────────────────
       - name: Cache source tarballs
+        id: cache-src
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/tarballs
-          key: src-binutils-${{ env.BINUTILS_VERSION }}-gcc-${{ env.GCC_VERSION }}-newlib-${{ env.NEWLIB_VERSION }}
+          key: src-${{ env.ESP_GCC_TAG }}-${{ env.ESP_BINUTILS_TAG }}-newlib-${{ env.NEWLIB_VERSION }}-v1
 
       - name: Download source tarballs
+        if: steps.cache-src.outputs.cache-hit != 'true'
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/tarballs"
           cd "${GITHUB_WORKSPACE}/tarballs"
           
-          dl() {
-            local file="$1" url="$2"
-            if [ ! -f "$file" ]; then
-              echo "Downloading $file..."
-              wget -q "$url" -O "$file"
-            else
-              echo "Cached: $file"
-            fi
-          }
+          echo "--- Downloading Espressif GCC (has Xtensa backend) ---"
+          wget --progress=dot:mega \
+            "https://github.com/espressif/gcc/archive/refs/tags/${ESP_GCC_TAG}.tar.gz" \
+            -O "esp-gcc.tar.gz"
           
-          dl "binutils-${BINUTILS_VERSION}.tar.xz" \
-            "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.xz"
+          echo "--- Downloading Espressif Binutils ---"
+          wget --progress=dot:mega \
+            "https://github.com/espressif/binutils-gdb/archive/refs/tags/${ESP_BINUTILS_TAG}.tar.gz" \
+            -O "esp-binutils.tar.gz"
           
-          dl "gcc-${GCC_VERSION}.tar.xz" \
-            "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"
+          echo "--- Downloading Newlib (HTTPS, not FTP) ---"
+          wget --progress=dot:mega \
+            "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" \
+            -O "newlib.tar.gz"
           
-          dl "newlib-${NEWLIB_VERSION}.tar.gz" \
-            "ftp://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz"
-          
+          echo "--- Sizes ---"
           ls -lh .
+          
+          # Sanity: all files must be > 5 MB
+          python3 -c "
+          import os, sys
+          files = ['esp-gcc.tar.gz', 'esp-binutils.tar.gz', 'newlib.tar.gz']
+          ok = True
+          for f in files:
+              sz = os.path.getsize(f)
+              print(f'{f}: {sz/1024/1024:.1f} MB')
+              if sz < 5_000_000:
+                  print(f'ERROR: {f} too small — download failed')
+                  ok = False
+          sys.exit(0 if ok else 1)
+          "
 
       # ── 4. Extract sources ────────────────────────────────────────────────
       - name: Extract sources
@@ -118,100 +140,111 @@ jobs:
           mkdir -p "${WORK}/src"
           cd "${WORK}/src"
           
-          echo "Extracting binutils..."
-          tar -xf "${GITHUB_WORKSPACE}/tarballs/binutils-${BINUTILS_VERSION}.tar.xz"
+          echo "Extracting Binutils..."
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/esp-binutils.tar.gz"
+          BINUTILS_DIR=$(ls -d binutils-gdb-* 2>/dev/null || ls -d *binutils* 2>/dev/null | head -1)
+          echo "BINUTILS_DIR=${WORK}/src/${BINUTILS_DIR}" >> $GITHUB_ENV
           
           echo "Extracting GCC..."
-          tar -xf "${GITHUB_WORKSPACE}/tarballs/gcc-${GCC_VERSION}.tar.xz"
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/esp-gcc.tar.gz"
+          GCC_DIR=$(ls -d gcc-* 2>/dev/null | head -1)
+          echo "GCC_DIR=${WORK}/src/${GCC_DIR}" >> $GITHUB_ENV
           
-          echo "Extracting newlib..."
-          tar -xf "${GITHUB_WORKSPACE}/tarballs/newlib-${NEWLIB_VERSION}.tar.gz"
+          echo "Extracting Newlib..."
+          tar -xf "${GITHUB_WORKSPACE}/tarballs/newlib.tar.gz"
+          NEWLIB_DIR=$(ls -d newlib-* 2>/dev/null | head -1)
+          echo "NEWLIB_DIR=${WORK}/src/${NEWLIB_DIR}" >> $GITHUB_ENV
           
-          # Symlink newlib into GCC source tree (standard practice)
-          ln -s "${WORK}/src/newlib-${NEWLIB_VERSION}/newlib" \
-                "${WORK}/src/gcc-${GCC_VERSION}/newlib"
-          ln -s "${WORK}/src/newlib-${NEWLIB_VERSION}/libgloss" \
-                "${WORK}/src/gcc-${GCC_VERSION}/libgloss"
-          
-          # Download GCC prerequisites (gmp, mpfr, mpc) into gcc source
-          cd "${WORK}/src/gcc-${GCC_VERSION}"
-          ./contrib/download_prerequisites
-          
-          echo "Sources ready."
+          echo "--- Source dirs ---"
+          ls -la "${WORK}/src/"
 
-      # ── 5. Setup NDK clang wrappers ───────────────────────────────────────
-      # CT-NG and GCC configure scripts call the compiler as
-      # "aarch64-linux-android-gcc". The NDK ships clang wrappers named
-      # "aarch64-linux-android21-clang". We create symlinks so configure
-      # finds the right tool under the expected name.
+      # ── 5. GCC prerequisites (gmp/mpfr/mpc via download_prerequisites) ────
+      - name: Download GCC prerequisites
+        run: |
+          cd "${GCC_DIR}"
+          # This script downloads gmp/mpfr/mpc from gnu.org HTTPS and
+          # places them inside the GCC source tree
+          ./contrib/download_prerequisites
+          echo "GCC prereqs done"
+
+      # ── 6. Symlink Newlib into GCC source (standard practice) ─────────────
+      - name: Link Newlib into GCC tree
+        run: |
+          ln -sf "${NEWLIB_DIR}/newlib"  "${GCC_DIR}/newlib"
+          ln -sf "${NEWLIB_DIR}/libgloss" "${GCC_DIR}/libgloss"
+          echo "Newlib linked into GCC source"
+
+      # ── 7. Create NDK compiler wrappers ───────────────────────────────────
+      # GCC configure looks for ${HOST}-gcc on PATH.
+      # NDK ships clang as aarch64-linux-android21-clang.
+      # Symlinks bridge the naming gap — no wrapper scripts needed.
       - name: Create NDK compiler wrappers
         run: |
-          WRAP="${GITHUB_WORKSPACE}/ndk-wrappers"
           mkdir -p "${WRAP}"
+          API="${ANDROID_API}"
           
-          # Clang wrapper → gcc-named symlink
-          ln -sf "${LLVM_BIN}/aarch64-linux-android21-clang"   "${WRAP}/aarch64-linux-android-gcc"
-          ln -sf "${LLVM_BIN}/aarch64-linux-android21-clang++" "${WRAP}/aarch64-linux-android-g++"
-          ln -sf "${LLVM_BIN}/llvm-ar"                          "${WRAP}/aarch64-linux-android-ar"
-          ln -sf "${LLVM_BIN}/llvm-ranlib"                      "${WRAP}/aarch64-linux-android-ranlib"
-          ln -sf "${LLVM_BIN}/llvm-strip"                       "${WRAP}/aarch64-linux-android-strip"
-          ln -sf "${LLVM_BIN}/llvm-nm"                          "${WRAP}/aarch64-linux-android-nm"
-          ln -sf "${LLVM_BIN}/llvm-objcopy"                     "${WRAP}/aarch64-linux-android-objcopy"
-          ln -sf "${LLVM_BIN}/llvm-objdump"                     "${WRAP}/aarch64-linux-android-objdump"
+          ln -sf "${LLVM_BIN}/aarch64-linux-android${API}-clang"   "${WRAP}/aarch64-linux-android-gcc"
+          ln -sf "${LLVM_BIN}/aarch64-linux-android${API}-clang++" "${WRAP}/aarch64-linux-android-g++"
+          ln -sf "${LLVM_BIN}/llvm-ar"                              "${WRAP}/aarch64-linux-android-ar"
+          ln -sf "${LLVM_BIN}/llvm-ranlib"                          "${WRAP}/aarch64-linux-android-ranlib"
+          ln -sf "${LLVM_BIN}/llvm-strip"                           "${WRAP}/aarch64-linux-android-strip"
+          ln -sf "${LLVM_BIN}/llvm-nm"                              "${WRAP}/aarch64-linux-android-nm"
+          ln -sf "${LLVM_BIN}/llvm-objcopy"                         "${WRAP}/aarch64-linux-android-objcopy"
+          ln -sf "${LLVM_BIN}/llvm-objdump"                         "${WRAP}/aarch64-linux-android-objdump"
+          ln -sf "${LLVM_BIN}/llvm-as"                              "${WRAP}/aarch64-linux-android-as"
+          ln -sf "${LLVM_BIN}/lld"                                  "${WRAP}/aarch64-linux-android-ld"
           
-          # Also add the LLVM bin dir itself (for lld, etc.)
-          echo "NDK_WRAP=${WRAP}" >> $GITHUB_ENV
-          
-          echo "Wrappers:"
+          echo "Wrappers created:"
           ls -la "${WRAP}/"
 
-      # ── 6. Stage 1 — Build Binutils (host = Android ARM64) ───────────────
-      - name: Build Binutils for Android host
+      # ── 8. Build Binutils ─────────────────────────────────────────────────
+      - name: Build Binutils (host=Android ARM64, target=xtensa-esp-elf)
         run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          
           mkdir -p "${WORK}/build-binutils"
           cd "${WORK}/build-binutils"
           
-          export PATH="${NDK_WRAP}:${LLVM_BIN}:${PATH}"
-          
-          "${WORK}/src/binutils-${BINUTILS_VERSION}/configure" \
+          "${BINUTILS_DIR}/configure" \
             --build=x86_64-linux-gnu \
-            --host=aarch64-linux-android \
+            --host="${HOST_TRIPLE}" \
             --target="${TARGET}" \
-            --prefix="${INSTALL_PREFIX}" \
+            --prefix="${PREFIX}" \
             --with-sysroot \
             --disable-nls \
             --disable-werror \
             --disable-sim \
             --disable-gdb \
-            --enable-plugins \
             --enable-lto \
             CC="aarch64-linux-android-gcc" \
             CXX="aarch64-linux-android-g++" \
-            AR="llvm-ar" \
-            RANLIB="llvm-ranlib" \
+            AR="${LLVM_BIN}/llvm-ar" \
+            RANLIB="${LLVM_BIN}/llvm-ranlib" \
+            STRIP="${LLVM_BIN}/llvm-strip" \
             CFLAGS="-O2" \
             CXXFLAGS="-O2"
           
-          make -j$(nproc)
+          make -j$(nproc) 2>&1 | tail -20
           make install
-          echo "✓ Binutils built"
+          echo "✓ Binutils installed to ${PREFIX}"
+          ls "${PREFIX}/bin/" | grep xtensa | head -5
 
-      # ── 7. Stage 2 — Build GCC (bootstrap, host = Android ARM64) ─────────
-      - name: Build GCC for Android host
+      # ── 9. Build GCC (host=Android ARM64, target=xtensa-esp-elf) ──────────
+      - name: Build GCC (host=Android ARM64, target=xtensa-esp-elf)
         run: |
+          # PREFIX/bin must come first so GCC finds our just-built xtensa-esp-elf-as/ld
+          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          
           mkdir -p "${WORK}/build-gcc"
           cd "${WORK}/build-gcc"
           
-          export PATH="${INSTALL_PREFIX}/bin:${NDK_WRAP}:${LLVM_BIN}:${PATH}"
-          
-          "${WORK}/src/gcc-${GCC_VERSION}/configure" \
+          "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
-            --host=aarch64-linux-android \
+            --host="${HOST_TRIPLE}" \
             --target="${TARGET}" \
-            --prefix="${INSTALL_PREFIX}" \
+            --prefix="${PREFIX}" \
             --with-newlib \
-            --with-headers="${WORK}/src/newlib-${NEWLIB_VERSION}/newlib/libc/include" \
-            --without-headers \
+            --with-headers="${NEWLIB_DIR}/newlib/libc/include" \
             --enable-languages=c,c++ \
             --disable-shared \
             --disable-threads \
@@ -227,68 +260,91 @@ jobs:
             --with-gnu-ld \
             CC="aarch64-linux-android-gcc" \
             CXX="aarch64-linux-android-g++" \
-            AR="llvm-ar" \
-            RANLIB="llvm-ranlib" \
+            AR="${LLVM_BIN}/llvm-ar" \
+            RANLIB="${LLVM_BIN}/llvm-ranlib" \
+            STRIP="${LLVM_BIN}/llvm-strip" \
             CFLAGS="-O2" \
             CXXFLAGS="-O2"
           
-          # all-gcc builds only the compiler driver (not runtime libs)
-          # This is the standard approach for a cross-compiler targeting bare metal
-          make -j$(nproc) all-gcc
+          # all-gcc: builds only the compiler driver (no runtime libs needed yet)
+          # all-target-libgcc: builds libgcc for the ESP32 target
+          make -j$(nproc) all-gcc 2>&1 | tail -20
           make install-gcc
           
-          # Now build and install target runtime (libgcc for ESP32)
-          make -j$(nproc) all-target-libgcc
+          make -j$(nproc) all-target-libgcc 2>&1 | tail -20
           make install-target-libgcc
           
-          echo "✓ GCC built"
+          echo "✓ GCC installed to ${PREFIX}"
 
-      # ── 8. Verify output ──────────────────────────────────────────────────
-      - name: Verify toolchain binaries
+      # ── 10. Strip binaries to reduce size ─────────────────────────────────
+      - name: Strip host binaries
         run: |
-          echo "=== bin/ contents ==="
-          ls -lh "${INSTALL_PREFIX}/bin/" | grep xtensa
+          "${LLVM_BIN}/llvm-strip" --strip-unneeded \
+            "${PREFIX}"/bin/xtensa-esp-elf-* 2>/dev/null || true
+          echo "Strip done"
+          du -sh "${PREFIX}"
+
+      # ── 11. Verify: must be ARM64 ELF (Bionic), not x86_64 (glibc) ────────
+      - name: Verify toolchain architecture
+        run: |
+          GCC="${PREFIX}/bin/xtensa-esp-elf-gcc"
+          GPP="${PREFIX}/bin/xtensa-esp-elf-g++"
           
-          GCC="${INSTALL_PREFIX}/bin/xtensa-esp-elf-gcc"
-          GPP="${INSTALL_PREFIX}/bin/xtensa-esp-elf-g++"
-          
-          echo ""
-          echo "=== file type ==="
+          echo "=== file output ==="
           file "${GCC}"
           file "${GPP}"
           
           echo ""
-          echo "=== ELF header (e_machine byte 19 = 0xB7 means AArch64) ==="
-          python3 -c "
-          import struct, sys
-          with open('${GCC}', 'rb') as f:
+          echo "=== Architecture check ==="
+          python3 - << 'PYEOF'
+          import struct, sys, os
+          
+          prefix = os.environ['PREFIX']
+          gcc = f"{prefix}/bin/xtensa-esp-elf-gcc"
+          
+          with open(gcc, 'rb') as f:
               data = f.read(20)
-          magic = data[:4]
+          
+          magic     = data[:4]
+          ei_class  = data[4]   # 2 = 64-bit
           e_machine = struct.unpack_from('<H', data, 18)[0]
-          print(f'Magic: {magic}')
-          print(f'e_machine: 0x{e_machine:04X}  (AArch64=0x00B7, x86_64=0x003E)')
-          ok = e_machine == 0x00B7
-          print('PASS: Android ARM64 binary' if ok else 'FAIL: Wrong architecture!')
-          sys.exit(0 if ok else 1)
-          "
+          
+          print(f"ELF magic   : {magic}")
+          print(f"EI_CLASS    : {ei_class}  (2=64-bit)")
+          print(f"e_machine   : 0x{e_machine:04X}")
+          print(f"             0x00B7 = AArch64 (Android ARM64)  ✓")
+          print(f"             0x003E = x86_64  (glibc — WRONG) ✗")
+          
+          if magic != b'\x7fELF':
+              print("FAIL: Not an ELF binary")
+              sys.exit(1)
+          if e_machine != 0x00B7:
+              print(f"FAIL: Binary is NOT AArch64 (got 0x{e_machine:04X}) — this would crash on Android!")
+              sys.exit(1)
+          
+          print("")
+          print("PASS: Binary is AArch64 — will run on Android ARM64")
+          PYEOF
           
           echo ""
-          echo "=== Size ==="
-          du -sh "${INSTALL_PREFIX}"
+          echo "=== Binaries ==="
+          ls -lh "${PREFIX}/bin/" | grep xtensa
 
-      # ── 9. Package ────────────────────────────────────────────────────────
+      # ── 12. Package ───────────────────────────────────────────────────────
       - name: Package toolchain
         run: |
-          cd "${GITHUB_WORKSPACE}"
-          tar -czf toolchain-android-arm64.tar.gz \
-            -C "$(dirname "${INSTALL_PREFIX}")" \
-            "$(basename "${INSTALL_PREFIX}")"
-          sha256sum toolchain-android-arm64.tar.gz \
-            > toolchain-android-arm64.tar.gz.sha256
-          ls -lh toolchain-android-arm64.tar.gz
-          cat toolchain-android-arm64.tar.gz.sha256
+          tar -czf "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
+            -C "$(dirname "${PREFIX}")" \
+            "$(basename "${PREFIX}")"
+          
+          sha256sum "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
+            > "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
+          
+          echo "=== Package ==="
+          ls -lh "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz"
+          cat "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
 
-      # ── 10. Upload ────────────────────────────────────────────────────────
+      # ── 13. Upload artifact ───────────────────────────────────────────────
       - name: Upload toolchain artifact
         uses: actions/upload-artifact@v4
         with:
@@ -298,7 +354,7 @@ jobs:
             toolchain-android-arm64.tar.gz.sha256
           retention-days: 30
 
-      # ── 11. GitHub Release on tag ─────────────────────────────────────────
+      # ── 14. GitHub Release (on git tag push) ──────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -309,13 +365,13 @@ jobs:
           body: |
             ## ESP32 Android ARM64 Toolchain
             
-            Canadian Cross compiled — runs on Android, compiles for ESP32.
+            Canadian Cross — runs on Android, compiles for ESP32.
             
             | | |
             |---|---|
             | **Host** | aarch64-linux-android21 (Bionic libc) |
             | **Target** | xtensa-esp-elf |
-            | **GCC** | ${{ env.GCC_VERSION }} |
-            | **Binutils** | ${{ env.BINUTILS_VERSION }} |
+            | **GCC** | Espressif fork ${{ env.ESP_GCC_TAG }} |
+            | **Binutils** | Espressif fork ${{ env.ESP_BINUTILS_TAG }} |
             | **Newlib** | ${{ env.NEWLIB_VERSION }} |
             | **NDK** | ${{ env.NDK_VERSION }} |
