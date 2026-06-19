@@ -25,9 +25,6 @@ env:
   LLVM_BIN:         "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
   WRAP:             "${{ github.workspace }}/ndk-wrap"
   WORK:             "${{ github.workspace }}/work"
-
-  # FIX #3: Separate host-dep prefix from toolchain prefix so packaging
-  #         does not include Android-side libgmp/libmpfr/libmpc.
   HOST_DEPS:        "${{ github.workspace }}/host-deps"
   PREFIX:           "${{ github.workspace }}/staging/esp-2021r2-patch5/xtensa-esp-elf"
 
@@ -39,7 +36,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── 1. Host build tools ────────────────────────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -50,7 +46,6 @@ jobs:
             python3 texinfo unzip wget xz-utils \
             zlib1g-dev build-essential binutils-dev
 
-      # ── 2. Android NDK ─────────────────────────────────────────────────
       - name: Cache NDK
         id: cache-ndk
         uses: actions/cache@v4
@@ -73,538 +68,309 @@ jobs:
           "${LLVM_BIN}/aarch64-linux-android${ANDROID_API}-clang" --version | head -1
           echo "NDK OK"
 
-      # ── 3. NDK compiler wrappers ────────────────────────────────────────
-      # Written by Python — zero heredoc/YAML indentation risk.
-      # FIX #4: Smoke test now uses readelf to verify Bionic linkage,
-      #         not just "file" arch check.
       - name: Create NDK compiler wrappers
         run: |
           mkdir -p "${WRAP}"
+          
+          cat > "${WRAP}/aarch64-linux-android-gcc" << 'EOF'
+          #!/bin/sh
+          exec "${LLVM_BIN}/clang" --target=aarch64-linux-android${ANDROID_API} --sysroot="${NDK_SYSROOT}" "$@"
+          EOF
+          
+          cat > "${WRAP}/aarch64-linux-android-g++" << 'EOF'
+          #!/bin/sh
+          exec "${LLVM_BIN}/clang++" --target=aarch64-linux-android${ANDROID_API} --sysroot="${NDK_SYSROOT}" "$@"
+          EOF
+          
+          chmod +x "${WRAP}/aarch64-linux-android-gcc" "${WRAP}/aarch64-linux-android-g++"
+          
+          for tool in ar ranlib strip nm objcopy objdump as readelf; do
+            ln -sf "${LLVM_BIN}/llvm-${tool}" "${WRAP}/aarch64-linux-android-${tool}"
+          done
+          
+          if [ -f "${LLVM_BIN}/ld.lld" ]; then
+            ln -sf "${LLVM_BIN}/ld.lld" "${WRAP}/aarch64-linux-android-ld"
+          else
+            ln -sf "${LLVM_BIN}/lld" "${WRAP}/aarch64-linux-android-ld"
+          fi
+          
+          echo "Wrappers created:"
+          ls -la "${WRAP}/"
+          
+          echo 'int main(void){return 0;}' > /tmp/test.c
+          PATH="${WRAP}:${LLVM_BIN}:${PATH}" \
+            aarch64-linux-android-gcc /tmp/test.c -o /tmp/test.out
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Smoke test PASSED"
+            readelf -d /tmp/test.out | grep -q "libc.so" && echo "✅ Bionic libc detected"
+          else
+            echo "❌ Smoke test FAILED"
+            exit 1
+          fi
 
-          python3 - << 'PYEOF'
-          import os, stat, subprocess, sys
+      - name: Cache source tarballs
+        id: cache-src
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/tarballs
+          key: src-${{ env.ESP_GCC_TAG }}-${{ env.ESP_BINUTILS_TAG }}-newlib-${{ env.NEWLIB_VERSION }}-isl${{ env.ISL_VERSION }}-v1
 
-          wrap     = os.environ['WRAP']
-          llvm_bin = os.environ['LLVM_BIN']
-          sysroot  = os.environ['NDK_SYSROOT']
-          api      = os.environ['ANDROID_API']
-          triple   = f"aarch64-linux-android{api}"
+      - name: Download source tarballs
+        if: steps.cache-src.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/tarballs"
+          cd "${GITHUB_WORKSPACE}/tarballs"
+          
+          wget_r() {
+            wget --retry-connrefused --tries=5 --timeout=60 --progress=dot:mega "$1" -O "$2"
+          }
+          
+          wget_r "https://codeload.github.com/espressif/gcc/tar.gz/refs/tags/${ESP_GCC_TAG}" "esp-gcc.tar.gz"
+          wget_r "https://codeload.github.com/espressif/binutils-gdb/tar.gz/refs/tags/${ESP_BINUTILS_TAG}" "esp-binutils.tar.gz"
+          wget_r "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" "newlib.tar.gz"
+          wget_r "https://ftpmirror.gnu.org/gmp/gmp-${GMP_VERSION}.tar.xz" "gmp.tar.xz"
+          wget_r "https://www.mpfr.org/mpfr-current/mpfr-${MPFR_VERSION}.tar.xz" "mpfr.tar.xz"
+          wget_r "https://ftpmirror.gnu.org/mpc/mpc-${MPC_VERSION}.tar.gz" "mpc.tar.gz"
+          wget_r "https://libisl.sourceforge.io/isl-${ISL_VERSION}.tar.xz" "isl.tar.xz"
+          
+          ls -lh .
 
-          def write_script(name, content):
-              path = os.path.join(wrap, name)
-              with open(path, 'w') as f:
-                  f.write(content)
-              os.chmod(path, 0o755)
+      - name: Extract sources
+        run: |
+          mkdir -p "${WORK}/src"
+          cd "${WORK}/src"
+          
+          for f in esp-binutils esp-gcc newlib gmp mpfr mpc isl; do
+            tarball=$(ls "${GITHUB_WORKSPACE}/tarballs/${f}".tar.* 2>/dev/null | head -1)
+            tar -xf "${tarball}"
+          done
+          
+          echo "--- Extracted ---"
+          ls -la .
+          
+          # Set env vars for extracted directories
+          echo "BINUTILS_DIR=${WORK}/src/$(ls -d binutils-gdb-* | head -1)" >> $GITHUB_ENV
+          echo "GCC_DIR=${WORK}/src/$(ls -d gcc-* | head -1)" >> $GITHUB_ENV
+          echo "NEWLIB_DIR=${WORK}/src/$(ls -d newlib-* | head -1)" >> $GITHUB_ENV
+          echo "GMP_DIR=${WORK}/src/$(ls -d gmp-* | head -1)" >> $GITHUB_ENV
+          echo "MPFR_DIR=${WORK}/src/$(ls -d mpfr-* | head -1)" >> $GITHUB_ENV
+          echo "MPC_DIR=${WORK}/src/$(ls -d mpc-* | head -1)" >> $GITHUB_ENV
+          echo "ISL_DIR=${WORK}/src/$(ls -d isl-* | head -1)" >> $GITHUB_ENV
 
-          write_script("aarch64-linux-android-gcc", f"""#!/bin/sh
-  exec "{llvm_bin}/clang" --target={triple} --sysroot="{sysroot}" "$@"
-  """)
-          write_script("aarch64-linux-android-g++", f"""#!/bin/sh
-  exec "{llvm_bin}/clang++" --target={triple} --sysroot="{sysroot}" "$@"
-  """)
+      - name: Build GMP for Android host
+        run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-gmp" && cd "${WORK}/build-gmp"
+          "${GMP_DIR}/configure" \
+            --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
+            --prefix="${HOST_DEPS}" \
+            --disable-shared --enable-static \
+            CC="aarch64-linux-android-gcc" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) && make install
 
-          for tool in ['ar','ranlib','strip','nm','objcopy','objdump','as','readelf']:
-              src = os.path.join(llvm_bin, f'llvm-{tool}')
-              dst = os.path.join(wrap, f'aarch64-linux-android-{tool}')
-              if os.path.exists(src):
-                  if os.path.lexists(dst): os.remove(dst)
-                  os.symlink(src, dst)
+      - name: Build MPFR for Android host
+        run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-mpfr" && cd "${WORK}/build-mpfr"
+          "${MPFR_DIR}/configure" \
+            --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
+            --prefix="${HOST_DEPS}" --with-gmp="${HOST_DEPS}" \
+            --disable-shared --enable-static \
+            CC="aarch64-linux-android-gcc" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) && make install
 
-          # ld: try ld.lld first, then lld
-          for ld in ['ld.lld', 'lld']:
-              src = os.path.join(llvm_bin, ld)
-              if os.path.exists(src):
-                  dst = os.path.join(wrap, 'aarch64-linux-android-ld')
-                  if os.path.lexists(dst): os.remove(dst)
-                  os.symlink(src, dst)
-                  break
+      - name: Build MPC for Android host
+        run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-mpc" && cd "${WORK}/build-mpc"
+          "${MPC_DIR}/configure" \
+            --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
+            --prefix="${HOST_DEPS}" \
+            --with-gmp="${HOST_DEPS}" --with-mpfr="${HOST_DEPS}" \
+            --disable-shared --enable-static \
+            CC="aarch64-linux-android-gcc" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) && make install
 
-          print("Wrappers created:")
-for f in sorted(os.listdir(wrap)):
-  print(f"  {f}")
+      - name: Build ISL for Android host
+        run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-isl" && cd "${WORK}/build-isl"
+          "${ISL_DIR}/configure" \
+            --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
+            --prefix="${HOST_DEPS}" --with-gmp-prefix="${HOST_DEPS}" \
+            --disable-shared --enable-static \
+            CC="aarch64-linux-android-gcc" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) && make install
 
-# ── Smoke test: verify Bionic linkage, not just arch ──────────
-  import tempfile
-with tempfile.NamedTemporaryFile(suffix='.c', mode='w', delete=False) as f:
-  f.write('int main(void){return 0;}\n')
-  cfile = f.name
-  outbin = cfile.replace('.c', '.out')
-  
-  gcc = os.path.join(wrap, 'aarch64-linux-android-gcc')
-  ret = subprocess.run([gcc, cfile, '-o', outbin], capture_output=True)
-if ret.returncode != 0:
-  print("FAIL: wrapper could not compile test program")
-  print(ret.stderr.decode())
-  sys.exit(1)
+      - name: Build Binutils
+        run: |
+          export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-binutils" && cd "${WORK}/build-binutils"
+          "${BINUTILS_DIR}/configure" \
+            --build=x86_64-linux-gnu \
+            --host="${HOST_TRIPLE}" \
+            --target="${TARGET}" \
+            --prefix="${PREFIX}" \
+            --with-sysroot="${NDK_SYSROOT}" \
+            --disable-nls --disable-werror \
+            --disable-sim --disable-gdb \
+            CC="aarch64-linux-android-gcc" \
+            CXX="aarch64-linux-android-g++" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) all-binutils all-gas all-ld
+          make install-binutils install-gas install-ld
 
-# FIX #4: check readelf -d for libc.so (Bionic), not just arch
-  re = subprocess.run(['readelf', '-d', outbin], capture_output=True, text=True)
-if 'libc.so' not in re.stdout:
-  print("FAIL: binary does not link against libc.so (not Bionic?)")
-  print(re.stdout)
-  sys.exit(1)
+      - name: Build GCC Stage 1 (bootstrap C only)
+        run: |
+          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-gcc-s1" && cd "${WORK}/build-gcc-s1"
+          "${GCC_DIR}/configure" \
+            --build=x86_64-linux-gnu \
+            --host="${HOST_TRIPLE}" \
+            --target="${TARGET}" \
+            --prefix="${PREFIX}" \
+            --with-gmp="${HOST_DEPS}" \
+            --with-mpfr="${HOST_DEPS}" \
+            --with-mpc="${HOST_DEPS}" \
+            --with-isl="${HOST_DEPS}" \
+            --enable-languages=c \
+            --without-headers \
+            --with-newlib \
+            --disable-shared --disable-threads \
+            --disable-libssp --disable-libquadmath \
+            --disable-libgomp --disable-libvtv \
+            --disable-libatomic \
+            --disable-nls --disable-werror --disable-multilib \
+            CC="aarch64-linux-android-gcc" \
+            CXX="aarch64-linux-android-g++" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) all-gcc
+          make install-gcc
+          make -j$(nproc) all-target-libgcc
+          make install-target-libgcc
 
-print("Smoke test PASSED: binary links against Bionic libc.so ✓")
-  PYEOF
+      - name: Build Newlib
+        run: |
+          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-newlib" && cd "${WORK}/build-newlib"
+          "${NEWLIB_DIR}/configure" \
+            --build=x86_64-linux-gnu \
+            --host="${TARGET}" \
+            --target="${TARGET}" \
+            --prefix="${PREFIX}" \
+            --enable-newlib-io-long-long \
+            --enable-newlib-register-fini \
+            --disable-newlib-supplied-syscalls \
+            CC_FOR_TARGET="${TARGET}-gcc" \
+            CXX_FOR_TARGET="${TARGET}-g++" \
+            AR_FOR_TARGET="${TARGET}-ar" \
+            RANLIB_FOR_TARGET="${TARGET}-ranlib" \
+            CFLAGS_FOR_TARGET="-O2 -ffunction-sections -fdata-sections"
+          make -j$(nproc)
+          make install
+          
+          # Verify headers
+          if [ ! -f "${PREFIX}/${TARGET}/include/stdio.h" ]; then
+            echo "ERROR: stdio.h not found"
+            exit 1
+          fi
+          ln -sf "${PREFIX}/${TARGET}/include" "${PREFIX}/${TARGET}/sys-include"
 
-# ── 4. Download sources (ALL pure HTTPS — zero FTP) ────────────────
-- name: Cache source tarballs
-  id: cache-src
-  uses: actions/cache@v4
-  with:
-    path: ${{ github.workspace }}/tarballs
-    key: >-
-      src-${{ env.ESP_GCC_TAG }}-${{ env.ESP_BINUTILS_TAG }}-newlib-${{
-      env.NEWLIB_VERSION }}-isl${{ env.ISL_VERSION }}-v1
+      - name: Build GCC Stage 2 (final C + C++)
+        run: |
+          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          mkdir -p "${WORK}/build-gcc-s2" && cd "${WORK}/build-gcc-s2"
+          "${GCC_DIR}/configure" \
+            --build=x86_64-linux-gnu \
+            --host="${HOST_TRIPLE}" \
+            --target="${TARGET}" \
+            --prefix="${PREFIX}" \
+            --with-gmp="${HOST_DEPS}" \
+            --with-mpfr="${HOST_DEPS}" \
+            --with-mpc="${HOST_DEPS}" \
+            --with-isl="${HOST_DEPS}" \
+            --with-newlib \
+            --with-headers="${PREFIX}/${TARGET}/include" \
+            --with-sysroot="${PREFIX}/${TARGET}" \
+            --enable-languages=c,c++ \
+            --disable-shared --disable-threads \
+            --disable-libssp --disable-libquadmath \
+            --disable-libgomp --disable-libvtv \
+            --disable-libatomic \
+            --disable-nls --disable-werror --disable-multilib \
+            CC="aarch64-linux-android-gcc" \
+            CXX="aarch64-linux-android-g++" \
+            AR="${WRAP}/aarch64-linux-android-ar" \
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+          make -j$(nproc) all-gcc
+          make install-gcc
+          make -j$(nproc) all-target-libgcc
+          make install-target-libgcc
+          make -j$(nproc) all-target-libstdc++-v3
+          make install-target-libstdc++-v3
 
-- name: Download source tarballs
-  if: steps.cache-src.outputs.cache-hit != 'true'
-  run: |
-    mkdir -p "${GITHUB_WORKSPACE}/tarballs"
-    cd "${GITHUB_WORKSPACE}/tarballs"
-    
-    wget_r() {
-      wget --retry-connrefused --tries=5 --timeout=60 \
-           --progress=dot:mega "$1" -O "$2"
-    }
-    
-    wget_r "https://codeload.github.com/espressif/gcc/tar.gz/refs/tags/${ESP_GCC_TAG}" \
-           "esp-gcc.tar.gz"
-    wget_r "https://codeload.github.com/espressif/binutils-gdb/tar.gz/refs/tags/${ESP_BINUTILS_TAG}" \
-           "esp-binutils.tar.gz"
-    wget_r "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" \
-           "newlib.tar.gz"
-    wget_r "https://ftpmirror.gnu.org/gmp/gmp-${GMP_VERSION}.tar.xz" \
-           "gmp.tar.xz"
-    wget_r "https://www.mpfr.org/mpfr-current/mpfr-${MPFR_VERSION}.tar.xz" \
-           "mpfr.tar.xz"
-    wget_r "https://ftpmirror.gnu.org/mpc/mpc-${MPC_VERSION}.tar.gz" \
-           "mpc.tar.gz"
-    # FIX #9: download ISL to prevent Graphite configure errors
-    wget_r "https://libisl.sourceforge.io/isl-${ISL_VERSION}.tar.xz" \
-           "isl.tar.xz"
-    
-    python3 -c "
-    import os, sys
-    files = {
-      'esp-gcc.tar.gz':    5_000_000,
-      'esp-binutils.tar.gz': 5_000_000,
-      'newlib.tar.gz':     1_000_000,
-      'gmp.tar.xz':          500_000,
-      'mpfr.tar.xz':         500_000,
-      'mpc.tar.gz':          100_000,
-      'isl.tar.xz':          500_000,
-    }
-    ok = True
-    for f, mn in files.items():
-        sz = os.path.getsize(f)
-        st = 'OK' if sz >= mn else 'FAIL'
-        print(f'  {f}: {sz//1024} KB — {st}')
-        if sz < mn: ok = False
-    sys.exit(0 if ok else 1)
-    "
+      - name: Strip host binaries
+        run: |
+          for f in "${PREFIX}/bin/xtensa-esp-elf-"*; do
+            if [ -f "$f" ] && ! [ -L "$f" ]; then
+              file "$f" | grep -q ELF && "${LLVM_BIN}/llvm-strip" --strip-unneeded "$f" 2>/dev/null || true
+            fi
+          done
+          du -sh "${PREFIX}"
 
-# ── 5. Extract sources ──────────────────────────────────────────────
-- name: Extract sources
-  run: |
-    mkdir -p "${WORK}/src"
-    cd "${WORK}/src"
-    for f in esp-binutils esp-gcc newlib gmp mpfr mpc isl; do
-      echo "Extracting ${f}..."
-      # find the matching tarball regardless of extension
-      tarball=$(ls "${GITHUB_WORKSPACE}/tarballs/${f}".tar.* 2>/dev/null | head -1)
-      tar -xf "${tarball}"
-    done
-    
-    echo "--- Extracted ---"
-    ls -la .
-    
-    python3 - << 'PYEOF'
-    import os, glob
-    
-    src      = os.path.join(os.environ['WORK'], 'src')
-    env_file = os.environ['GITHUB_ENV']
-    
-    patterns = {
-        'BINUTILS_DIR': 'binutils-gdb-*',
-        'GCC_DIR':      'gcc-*',
-        'NEWLIB_DIR':   'newlib-*',
-        'GMP_DIR':      'gmp-*',
-        'MPFR_DIR':     'mpfr-*',
-        'MPC_DIR':      'mpc-*',
-        'ISL_DIR':      'isl-*',
-    }
-    
-    with open(env_file, 'a') as f:
-        for var, pat in patterns.items():
-            matches = [d for d in glob.glob(os.path.join(src, pat))
-                       if os.path.isdir(d)]
-            if not matches:
-                raise FileNotFoundError(f"No dir for {pat}")
-            d = sorted(matches)[0]
-            print(f"  {var} = {d}")
-            f.write(f"{var}={d}\n")
-    PYEOF
+      - name: Verify toolchain
+        run: |
+          GCC="${PREFIX}/bin/${TARGET}-gcc"
+          file "${GCC}"
+          echo "=== Checking Bionic linkage ==="
+          readelf -d "${GCC}" | grep -q "libc.so" && echo "✅ Bionic libc detected" || echo "⚠️ libc.so not found in NEEDED"
+          echo "=== Testing compile ==="
+          echo 'int add(int a,int b){return a+b;}' > /tmp/test.c
+          "${GCC}" -c -nostdlib /tmp/test.c -o /tmp/test.o
+          file /tmp/test.o | grep -q "ELF" && echo "✅ Compiles Xtensa object" || exit 1
+          echo "✅ Toolchain verified"
 
-# ── 6. Build GMP/MPFR/MPC/ISL into HOST_DEPS (separate from PREFIX) ─
-# FIX #3: install into HOST_DEPS so toolchain archive stays clean.
-- name: Build GMP for Android host
-  run: |
-    export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-gmp" && cd "${WORK}/build-gmp"
-    "${GMP_DIR}/configure" \
-      --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
-      --prefix="${HOST_DEPS}" \
-      --disable-shared --enable-static \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) && make install
-    echo "✓ GMP"
+      - name: Package toolchain
+        run: |
+          cd "${GITHUB_WORKSPACE}/staging"
+          tar -czf "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" "esp-2021r2-patch5"
+          sha256sum "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" > "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
+          ls -lh "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz"
 
-- name: Build MPFR for Android host
-  run: |
-    export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-mpfr" && cd "${WORK}/build-mpfr"
-    "${MPFR_DIR}/configure" \
-      --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
-      --prefix="${HOST_DEPS}" --with-gmp="${HOST_DEPS}" \
-      --disable-shared --enable-static \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) && make install
-    echo "✓ MPFR"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-android-arm64
+          path: |
+            toolchain-android-arm64.tar.gz
+            toolchain-android-arm64.tar.gz.sha256
+          retention-days: 30
 
-- name: Build MPC for Android host
-  run: |
-    export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-mpc" && cd "${WORK}/build-mpc"
-    "${MPC_DIR}/configure" \
-      --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
-      --prefix="${HOST_DEPS}" \
-      --with-gmp="${HOST_DEPS}" --with-mpfr="${HOST_DEPS}" \
-      --disable-shared --enable-static \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) && make install
-    echo "✓ MPC"
-
-- name: Build ISL for Android host
-  run: |
-    export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-isl" && cd "${WORK}/build-isl"
-    "${ISL_DIR}/configure" \
-      --build=x86_64-linux-gnu --host="${HOST_TRIPLE}" \
-      --prefix="${HOST_DEPS}" --with-gmp-prefix="${HOST_DEPS}" \
-      --disable-shared --enable-static \
-      CC="aarch64-linux-android-gcc" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) && make install
-    echo "✓ ISL"
-
-# ── 7. Build Binutils ───────────────────────────────────────────────
-# FIX #5: use make all-binutils / install-binutils (not bare "make")
-#         to avoid accidentally building gdb host tools.
-- name: Build Binutils
-  run: |
-    export PATH="${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-binutils" && cd "${WORK}/build-binutils"
-    "${BINUTILS_DIR}/configure" \
-      --build=x86_64-linux-gnu \
-      --host="${HOST_TRIPLE}" \
-      --target="${TARGET}" \
-      --prefix="${PREFIX}" \
-      --with-sysroot="${NDK_SYSROOT}" \
-      --disable-nls --disable-werror \
-      --disable-sim --disable-gdb \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) all-binutils all-gas all-ld
-    make install-binutils install-gas install-ld
-    echo "✓ Binutils"
-    ls "${PREFIX}/bin/" | grep xtensa
-
-# ── 8. GCC Stage 1 — C only bootstrap ──────────────────────────────
-- name: Build GCC Stage 1 (bootstrap C only)
-  run: |
-    export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-gcc-s1" && cd "${WORK}/build-gcc-s1"
-    "${GCC_DIR}/configure" \
-      --build=x86_64-linux-gnu \
-      --host="${HOST_TRIPLE}" \
-      --target="${TARGET}" \
-      --prefix="${PREFIX}" \
-      --with-gmp="${HOST_DEPS}" \
-      --with-mpfr="${HOST_DEPS}" \
-      --with-mpc="${HOST_DEPS}" \
-      --with-isl="${HOST_DEPS}" \
-      --enable-languages=c \
-      --without-headers \
-      --with-newlib \
-      --disable-shared --disable-threads \
-      --disable-libssp --disable-libquadmath \
-      --disable-libgomp --disable-libvtv \
-      --disable-libatomic \
-      --disable-nls --disable-werror --disable-multilib \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    make -j$(nproc) all-gcc
-    make install-gcc
-    # libgcc for target (needed before newlib)
-    make -j$(nproc) all-target-libgcc
-    make install-target-libgcc
-    echo "✓ GCC Stage 1"
-    "${PREFIX}/bin/${TARGET}-gcc" --version
-
-# ── 9. Build Newlib ─────────────────────────────────────────────────
-# FIX #1: use --host=${TARGET} --target=${TARGET} as many Newlib
-#         versions require an explicit host value matching target.
-#         CC_FOR_TARGET drives the actual compilation.
-- name: Build Newlib
-  run: |
-    export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-newlib" && cd "${WORK}/build-newlib"
-    "${NEWLIB_DIR}/configure" \
-      --build=x86_64-linux-gnu \
-      --host="${TARGET}" \
-      --target="${TARGET}" \
-      --prefix="${PREFIX}" \
-      --enable-newlib-io-long-long \
-      --enable-newlib-register-fini \
-      --disable-newlib-supplied-syscalls \
-      CC_FOR_TARGET="${TARGET}-gcc" \
-      CXX_FOR_TARGET="${TARGET}-g++" \
-      AR_FOR_TARGET="${TARGET}-ar" \
-      RANLIB_FOR_TARGET="${TARGET}-ranlib" \
-      CFLAGS_FOR_TARGET="-O2 -ffunction-sections -fdata-sections"
-    make -j$(nproc)
-    make install
-    echo "✓ Newlib"
-    
-    # Verify headers installed in the location GCC Stage 2 expects
-    HDIR="${PREFIX}/${TARGET}/include"
-    if [ ! -f "${HDIR}/stdio.h" ]; then
-      echo "ERROR: stdio.h not found in ${HDIR}"
-      ls "${PREFIX}/${TARGET}/" || true
-      exit 1
-    fi
-    echo "✓ Newlib headers verified at ${HDIR}"
-    
-    # FIX #6: also create sys-include symlink that libstdc++ configure
-    #         sometimes looks for instead of include/
-    SYSINCLUDE="${PREFIX}/${TARGET}/sys-include"
-    if [ ! -d "${SYSINCLUDE}" ]; then
-      ln -s "${HDIR}" "${SYSINCLUDE}"
-      echo "✓ sys-include symlink created"
-    fi
-
-# ── 10. GCC Stage 2 — C + C++ with full Newlib ─────────────────────
-# FIX #2 & #5: explicit make targets, never bare "make all".
-# FIX #6: --with-headers points to both include and sys-include.
-- name: Build GCC Stage 2 (final C + C++)
-  run: |
-    export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
-    mkdir -p "${WORK}/build-gcc-s2" && cd "${WORK}/build-gcc-s2"
-    "${GCC_DIR}/configure" \
-      --build=x86_64-linux-gnu \
-      --host="${HOST_TRIPLE}" \
-      --target="${TARGET}" \
-      --prefix="${PREFIX}" \
-      --with-gmp="${HOST_DEPS}" \
-      --with-mpfr="${HOST_DEPS}" \
-      --with-mpc="${HOST_DEPS}" \
-      --with-isl="${HOST_DEPS}" \
-      --with-newlib \
-      --with-headers="${PREFIX}/${TARGET}/include" \
-      --with-sysroot="${PREFIX}/${TARGET}" \
-      --enable-languages=c,c++ \
-      --disable-shared --disable-threads \
-      --disable-libssp --disable-libquadmath \
-      --disable-libgomp --disable-libvtv \
-      --disable-libatomic \
-      --disable-nls --disable-werror --disable-multilib \
-      CC="aarch64-linux-android-gcc" \
-      CXX="aarch64-linux-android-g++" \
-      AR="${WRAP}/aarch64-linux-android-ar" \
-      RANLIB="${WRAP}/aarch64-linux-android-ranlib"
-    
-    make -j$(nproc) all-gcc
-    make install-gcc
-    
-    make -j$(nproc) all-target-libgcc
-    make install-target-libgcc
-    
-    # FIX #6: build libstdc++ only after libgcc + newlib are confirmed present
-    make -j$(nproc) all-target-libstdc++-v3
-    make install-target-libstdc++-v3
-    
-    echo "✓ GCC Stage 2 complete"
-    "${PREFIX}/bin/${TARGET}-gcc" --version
-    "${PREFIX}/bin/${TARGET}-g++" --version
-
-# ── 11. Strip — ELF files only ──────────────────────────────────────
-# FIX #7: find ELF files by magic bytes, never strip scripts/symlinks.
-- name: Strip host binaries (ELF only)
-  run: |
-    python3 - << 'PYEOF'
-    import os, subprocess
-    
-    prefix   = os.environ['PREFIX']
-    llvm_bin = os.environ['LLVM_BIN']
-    strip    = os.path.join(llvm_bin, 'llvm-strip')
-    stripped = 0
-    skipped  = 0
-    
-    for root, dirs, files in os.walk(os.path.join(prefix, 'bin')):
-        for fname in files:
-            path = os.path.join(root, fname)
-            if os.path.islink(path):
-                skipped += 1
-                continue
-            try:
-                with open(path, 'rb') as f:
-                    magic = f.read(4)
-            except Exception:
-                skipped += 1
-                continue
-            if magic != b'\x7fELF':
-                skipped += 1
-                continue
-            r = subprocess.run(
-                [strip, '--strip-unneeded', path],
-                capture_output=True)
-            if r.returncode == 0:
-                stripped += 1
-            else:
-                print(f"  strip failed for {path}: {r.stderr.decode().strip()}")
-    
-    print(f"Stripped {stripped} ELF binaries, skipped {skipped} scripts/symlinks")
-    PYEOF
-    
-    du -sh "${PREFIX}"
-
-# ── 12. Full verification ───────────────────────────────────────────
-# FIX #8: check Bionic linkage via readelf -d, not just e_machine.
-- name: Verify toolchain
-  run: |
-    GCC="${PREFIX}/bin/${TARGET}-gcc"
-    
-    echo "=== file ==="
-    file "${GCC}"
-    
-    echo ""
-    echo "=== Architecture + Bionic linkage check ==="
-    python3 - << 'PYEOF'
-    import struct, subprocess, sys, os
-    
-    prefix = os.environ['PREFIX']
-    target = os.environ['TARGET']
-    gcc    = f"{prefix}/bin/{target}-gcc"
-    
-    # Check 1: e_machine == AArch64
-    with open(gcc, 'rb') as f:
-        data = f.read(20)
-    e_machine = struct.unpack_from('<H', data, 18)[0]
-    print(f"e_machine : 0x{e_machine:04X} (AArch64=0x00B7)")
-    if e_machine != 0x00B7:
-        print("FAIL: not AArch64")
-        sys.exit(1)
-    
-    # Check 2: readelf -d must show libc.so (Bionic), not libc.so.6 (glibc)
-    r = subprocess.run(['readelf', '-d', gcc], capture_output=True, text=True)
-    needed = [l for l in r.stdout.splitlines() if 'NEEDED' in l]
-    print("NEEDED libraries:")
-    for l in needed: print(f"  {l}")
-    
-    has_bionic = any('libc.so' in l and 'libc.so.6' not in l for l in needed)
-    has_glibc  = any('libc.so.6' in l for l in needed)
-    
-    if has_glibc:
-        print("FAIL: links against libc.so.6 (glibc) — crashes on Android!")
-        sys.exit(1)
-    if not has_bionic:
-        print("WARN: libc.so not found in NEEDED — may be statically linked")
-    
-    # Check 3: smoke-compile a C file FOR the ESP32 target
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix='.c', mode='w', delete=False) as f:
-        f.write('int add(int a, int b){ return a+b; }\n')
-        cfile = f.name
-    r = subprocess.run(
-        [gcc, '-c', '-nostdlib', cfile, '-o', cfile+'.o'],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f"FAIL: could not compile test C file:\n{r.stderr}")
-        sys.exit(1)
-    
-    r2 = subprocess.run(['file', cfile+'.o'], capture_output=True, text=True)
-    print(f"\nTarget object: {r2.stdout.strip()}")
-    if 'xtensa' not in r2.stdout.lower() and 'tensilica' not in r2.stdout.lower():
-        print("FAIL: object file is not Xtensa architecture!")
-        sys.exit(1)
-    
-    print("\n✓ PASS: AArch64 host binary compiling Xtensa target code")
-    PYEOF
-
-# ── 13. Package — toolchain only, no host-deps ──────────────────────
-# FIX #10: archive contains only PREFIX (toolchain), not HOST_DEPS.
-- name: Package toolchain
-  run: |
-    cd "${GITHUB_WORKSPACE}/staging"
-    tar -czf "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
-      "esp-2021r2-patch5"
-    sha256sum "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
-      > "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
-    echo "=== Package ==="
-    ls -lh "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz"
-    cat "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz.sha256"
-    
-    # Verify no Android host libs leaked into the archive
-    echo "=== Checking for leaked host libs ==="
-    tar -tzf "${GITHUB_WORKSPACE}/toolchain-android-arm64.tar.gz" \
-      | grep -E 'libgmp|libmpfr|libmpc|libisl' \
-      && echo "WARNING: host libs found in archive" \
-      || echo "✓ No host libs in archive"
-
-# ── 14. Upload artifact ──────────────────────────────────────────────
-- name: Upload artifact
-  uses: actions/upload-artifact@v4
-  with:
-    name: toolchain-android-arm64
-    path: |
-      toolchain-android-arm64.tar.gz
-      toolchain-android-arm64.tar.gz.sha256
-    retention-days: 30
-
-# ── 15. GitHub Release on tag push ───────────────────────────────────
-- name: Create GitHub Release
-  if: startsWith(github.ref, 'refs/tags/')
-  uses: softprops/action-gh-release@v2
-  with:
-    files: |
-      toolchain-android-arm64.tar.gz
-      toolchain-android-arm64.tar.gz.sha256
-    body: |
-      ## ESP32 Android ARM64 Toolchain
-      
-      Canadian Cross — runs on Android, compiles for ESP32.
-      
-      | | |
-      |---|---|
-      | **Host** | aarch64-linux-android21 (Bionic libc) |
-      | **Target** | xtensa-esp-elf |
-      | **GCC** | Espressif ${{ env.ESP_GCC_TAG }} |
-      | **Binutils** | Espressif ${{ env.ESP_BINUTILS_TAG }} |
-      | **Newlib** | ${{ env.NEWLIB_VERSION }} |
-      | **ISL** | ${{ env.ISL_VERSION }} |
-      | **NDK** | ${{ env.NDK_VERSION }} |
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            toolchain-android-arm64.tar.gz
+            toolchain-android-arm64.tar.gz.sha256
+          body: |
+            ## ESP32 Android ARM64 Toolchain
+            | | |
+            |---|---|
+            | **Host** | aarch64-linux-android21 (Bionic) |
+            | **Target** | xtensa-esp-elf |
+            | **GCC** | ${{ env.ESP_GCC_TAG }} |
+            | **Binutils** | ${{ env.ESP_BINUTILS_TAG }} |
+            | **Newlib** | ${{ env.NEWLIB_VERSION }} |
+            | **NDK** | ${{ env.NDK_VERSION }} |
