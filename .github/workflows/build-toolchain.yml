@@ -295,9 +295,14 @@ jobs:
           make -j$(nproc) all-binutils all-gas all-ld
           make install-binutils install-gas install-ld
 
+      # ── FIX: BUILD_TIME_TOOLS before PREFIX/bin so the x86_64-runnable
+      #         xtensa-esp-elf-nm / ar / ranlib are found before the Android
+      #         ARM64 copies that were just installed by the Binutils step.
+      #         Also pin *_FOR_TARGET vars explicitly so there is no PATH-lookup
+      #         ambiguity at all inside the libgcc sub-make.
       - name: Build GCC Stage 1 (bootstrap C only)
         run: |
-          export PATH="${PREFIX}/bin:${BUILD_TIME_TOOLS}:${WRAP}:${LLVM_BIN}:${PATH}"
+          export PATH="${BUILD_TIME_TOOLS}:${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-gcc-s1" && cd "${WORK}/build-gcc-s1"
           "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
@@ -320,7 +325,12 @@ jobs:
             CC="aarch64-linux-android-gcc" \
             CXX="aarch64-linux-android-g++" \
             AR="${WRAP}/aarch64-linux-android-ar" \
-            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib" \
+            NM_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-nm" \
+            AR_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ar" \
+            RANLIB_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ranlib" \
+            OBJDUMP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-objdump" \
+            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip"
           make -j$(nproc) all-gcc
           make install-gcc
           make -j$(nproc) all-target-libgcc
@@ -353,9 +363,12 @@ jobs:
           fi
           ln -sf "${PREFIX}/${TARGET}/include" "${PREFIX}/${TARGET}/sys-include"
 
+      # ── FIX: same PATH reorder + *_FOR_TARGET pins as Stage 1.
+      #         Stage 2 builds libstdc++ which hits the same Canadian Cross
+      #         wall when it tries to run the freshly-installed Android nm.
       - name: Build GCC Stage 2 (final C + C++)
         run: |
-          export PATH="${PREFIX}/bin:${BUILD_TIME_TOOLS}:${WRAP}:${LLVM_BIN}:${PATH}"
+          export PATH="${BUILD_TIME_TOOLS}:${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-gcc-s2" && cd "${WORK}/build-gcc-s2"
           "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
@@ -379,7 +392,12 @@ jobs:
             CC="aarch64-linux-android-gcc" \
             CXX="aarch64-linux-android-g++" \
             AR="${WRAP}/aarch64-linux-android-ar" \
-            RANLIB="${WRAP}/aarch64-linux-android-ranlib"
+            RANLIB="${WRAP}/aarch64-linux-android-ranlib" \
+            NM_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-nm" \
+            AR_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ar" \
+            RANLIB_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ranlib" \
+            OBJDUMP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-objdump" \
+            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip"
           make -j$(nproc) all-gcc
           make install-gcc
           make -j$(nproc) all-target-libgcc
