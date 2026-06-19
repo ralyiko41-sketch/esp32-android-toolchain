@@ -20,12 +20,16 @@ env:
   TARGET:           "xtensa-esp-elf"
   HOST_TRIPLE:      "aarch64-linux-android"
 
+  NATIVE_GCC_TAG:   "esp-2021r2"
+
   NDK_HOME:         "${{ github.workspace }}/ndk"
   NDK_SYSROOT:      "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
   LLVM_BIN:         "${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
   WRAP:             "${{ github.workspace }}/ndk-wrap"
   WORK:             "${{ github.workspace }}/work"
   HOST_DEPS:        "${{ github.workspace }}/host-deps"
+  NATIVE_TOOLS_DIR: "${{ github.workspace }}/native-build-tools"
+  BUILD_TIME_TOOLS: "${{ github.workspace }}/native-build-tools/renamed-bin"
   PREFIX:           "${{ github.workspace }}/staging/esp-2021r2-patch5/xtensa-esp-elf"
 
 jobs:
@@ -108,6 +112,67 @@ jobs:
             echo "❌ Smoke test FAILED"
             exit 1
           fi
+
+      - name: Cache native build-time toolchain
+        id: cache-native-tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NATIVE_TOOLS_DIR }}
+          key: native-tools-${{ env.NATIVE_GCC_TAG }}-v1
+
+      - name: Download native build-time toolchain (x86_64)
+        if: steps.cache-native-tools.outputs.cache-hit != 'true'
+        run: |
+          # This is a NATIVE (x86_64-linux) compiler that targets xtensa.
+          # It is NEVER shipped in the final artifact — it only exists so that
+          # GCC's own build process (which needs to *execute* a target compiler
+          # mid-build to generate specs/headers) has something it can actually run
+          # on the GitHub runner. Without this, the Canadian Cross build (build=x86_64,
+          # host=android-arm64, target=xtensa) fails with "command not found" because
+          # the freshly-built xtensa-esp-elf-gcc is an ARM64 Android binary that
+          # cannot execute on the x86_64 runner.
+          mkdir -p "${NATIVE_TOOLS_DIR}"
+          cd "${NATIVE_TOOLS_DIR}"
+          
+          wget -q --retry-connrefused --tries=5 --timeout=60 --progress=dot:mega \
+            "https://github.com/espressif/crosstool-NG/releases/download/${NATIVE_GCC_TAG}/xtensa-esp32-elf-gcc8_4_0-${NATIVE_GCC_TAG}-linux-amd64.tar.gz" \
+            -O native-toolchain.tar.gz
+          
+          tar -xzf native-toolchain.tar.gz
+          rm native-toolchain.tar.gz
+          
+          ls -la .
+
+      - name: Prepare native build-time tools (rename to match TARGET)
+        run: |
+          # The prebuilt toolchain ships binaries prefixed "xtensa-esp32-elf-"
+          # but our TARGET is "xtensa-esp-elf". GCC's build process invokes
+          # tools by the exact target triplet, so we symlink them under the
+          # names it expects.
+          mkdir -p "${BUILD_TIME_TOOLS}"
+          
+          NATIVE_BIN_DIR=$(dirname "$(find "${NATIVE_TOOLS_DIR}" -name 'xtensa-esp32-elf-gcc' -not -name '*.exe' | head -1)")
+          
+          if [ -z "${NATIVE_BIN_DIR}" ] || [ ! -d "${NATIVE_BIN_DIR}" ]; then
+            echo "ERROR: could not locate extracted native toolchain bin directory"
+            find "${NATIVE_TOOLS_DIR}" -maxdepth 3
+            exit 1
+          fi
+          
+          echo "Found native bin dir: ${NATIVE_BIN_DIR}"
+          
+          for f in "${NATIVE_BIN_DIR}"/xtensa-esp32-elf-*; do
+            base=$(basename "$f")
+            suffix="${base#xtensa-esp32-elf-}"
+            ln -sf "$f" "${BUILD_TIME_TOOLS}/xtensa-esp-elf-${suffix}"
+          done
+          
+          echo "--- Renamed build-time tools ---"
+          ls -la "${BUILD_TIME_TOOLS}/"
+          
+          # Smoke test: this MUST run on the x86_64 runner directly.
+          "${BUILD_TIME_TOOLS}/xtensa-esp-elf-gcc" --version | head -1
+          echo "✅ Native build-time compiler runs on this host"
 
       - name: Cache source tarballs
         id: cache-src
@@ -232,7 +297,7 @@ jobs:
 
       - name: Build GCC Stage 1 (bootstrap C only)
         run: |
-          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          export PATH="${PREFIX}/bin:${BUILD_TIME_TOOLS}:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-gcc-s1" && cd "${WORK}/build-gcc-s1"
           "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
@@ -243,6 +308,7 @@ jobs:
             --with-mpfr="${HOST_DEPS}" \
             --with-mpc="${HOST_DEPS}" \
             --with-isl="${HOST_DEPS}" \
+            --with-build-time-tools="${BUILD_TIME_TOOLS}" \
             --enable-languages=c \
             --without-headers \
             --with-newlib \
@@ -289,7 +355,7 @@ jobs:
 
       - name: Build GCC Stage 2 (final C + C++)
         run: |
-          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          export PATH="${PREFIX}/bin:${BUILD_TIME_TOOLS}:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-gcc-s2" && cd "${WORK}/build-gcc-s2"
           "${GCC_DIR}/configure" \
             --build=x86_64-linux-gnu \
@@ -300,6 +366,7 @@ jobs:
             --with-mpfr="${HOST_DEPS}" \
             --with-mpc="${HOST_DEPS}" \
             --with-isl="${HOST_DEPS}" \
+            --with-build-time-tools="${BUILD_TIME_TOOLS}" \
             --with-newlib \
             --with-headers="${PREFIX}/${TARGET}/include" \
             --with-sysroot="${PREFIX}/${TARGET}" \
