@@ -196,7 +196,7 @@ jobs:
           wget_r "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" "newlib.tar.gz"
           wget_r "https://ftpmirror.gnu.org/gmp/gmp-${GMP_VERSION}.tar.xz" "gmp.tar.xz"
           wget_r "https://www.mpfr.org/mpfr-${MPFR_VERSION}/mpfr-${MPFR_VERSION}.tar.xz" "mpfr.tar.xz"
-          wget_r "https://ftpmirror.gnu.org/mpc/mpc-${MPC_VERSION}.tar.gz" "mpc.tar.gz"
+          wget_r "https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz" "mpc.tar.gz"
           wget_r "https://libisl.sourceforge.io/isl-${ISL_VERSION}.tar.xz" "isl.tar.xz"
           
           ls -lh .
