@@ -7,7 +7,7 @@ on:
 
 env:
   ESP_GCC_TAG:      "esp-2021r2"
-  ESP_BINUTILS_TAG: "esp-2021r2-patch4"
+  ESP_BINUTILS_TAG: "esp-2021r2-binutils"
   NEWLIB_VERSION:   "4.1.0"
   GMP_VERSION:      "6.2.1"
   MPFR_VERSION:     "4.2.0"
