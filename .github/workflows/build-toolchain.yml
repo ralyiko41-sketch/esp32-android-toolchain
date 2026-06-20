@@ -361,9 +361,10 @@ jobs:
           mkdir -p "${WORK}/build-newlib" && cd "${WORK}/build-newlib"
           "${NEWLIB_DIR}/configure" \
             --build=x86_64-linux-gnu \
-            --host="${TARGET}" \
+            --host=x86_64-linux-gnu \
             --target="${TARGET}" \
-            --prefix="${PREFIX}/${TARGET}" \
+            --prefix="${PREFIX}" \
+            --with-target-subdir="${TARGET}" \
             --enable-newlib-io-long-long \
             --enable-newlib-register-fini \
             --disable-newlib-supplied-syscalls \
