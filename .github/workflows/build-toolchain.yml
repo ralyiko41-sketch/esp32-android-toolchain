@@ -300,11 +300,11 @@ jobs:
           make -j$(nproc) all-binutils all-gas all-ld
           make install-binutils install-gas install-ld
 
-      # ── FIX: BUILD_TIME_TOOLS before PREFIX/bin so the x86_64-runnable
-      #         xtensa-esp-elf-nm/ar/ranlib are found before the Android ARM64
-      #         copies installed by the Binutils step above.
-      #         *_FOR_TARGET vars are pinned explicitly so there is no
-      #         PATH-lookup ambiguity inside the libgcc sub-make.
+      # ── BUILD_TIME_TOOLS before PREFIX/bin so the x86_64-runnable
+      #    xtensa-esp-elf-nm/ar/ranlib are found before the Android ARM64
+      #    copies installed by the Binutils step above.
+      #    *_FOR_TARGET vars are pinned explicitly so there is no
+      #    PATH-lookup ambiguity inside the libgcc sub-make.
       - name: Build GCC Stage 1 (bootstrap C only)
         run: |
           export PATH="${BUILD_TIME_TOOLS}:${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
@@ -342,9 +342,22 @@ jobs:
           make -j$(nproc) all-target-libgcc
           make install-target-libgcc
 
+      # ── FIX: same Canadian Cross problem as GCC, just hitting Newlib's
+      #    own ./configure this time. Autoconf's "checking whether the C
+      #    compiler works" test has to actually EXECUTE the compiler driver
+      #    on the build machine (x86_64 runner) to compile a test file -
+      #    it never executes the resulting target binary, but it does need
+      #    to run the compiler itself. ${PREFIX}/bin/xtensa-esp-elf-gcc is
+      #    an Android ARM64 binary and cannot run on the runner, so
+      #    configure reports "C compiler cannot create executables".
+      #    Fix: put BUILD_TIME_TOOLS (the x86_64-runnable native compiler,
+      #    same esp-2021r2 GCC source) first on PATH and pin every
+      #    *_FOR_TARGET variable to it explicitly. The object code it
+      #    produces is fully ABI-identical to what Stage 1 would produce -
+      #    only the *host* the compiler binary itself runs on differs.
       - name: Build Newlib
         run: |
-          export PATH="${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
+          export PATH="${BUILD_TIME_TOOLS}:${PREFIX}/bin:${WRAP}:${LLVM_BIN}:${PATH}"
           mkdir -p "${WORK}/build-newlib" && cd "${WORK}/build-newlib"
           "${NEWLIB_DIR}/configure" \
             --build=x86_64-linux-gnu \
@@ -354,10 +367,13 @@ jobs:
             --enable-newlib-io-long-long \
             --enable-newlib-register-fini \
             --disable-newlib-supplied-syscalls \
-            CC_FOR_TARGET="${TARGET}-gcc" \
-            CXX_FOR_TARGET="${TARGET}-g++" \
-            AR_FOR_TARGET="${TARGET}-ar" \
-            RANLIB_FOR_TARGET="${TARGET}-ranlib" \
+            CC_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-gcc" \
+            CXX_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-g++" \
+            AS_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-as" \
+            LD_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ld" \
+            AR_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ar" \
+            RANLIB_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ranlib" \
+            NM_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-nm" \
             CFLAGS_FOR_TARGET="-O2 -ffunction-sections -fdata-sections"
           make -j$(nproc)
           make install
