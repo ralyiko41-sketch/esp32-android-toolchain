@@ -330,7 +330,9 @@ jobs:
             AR_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ar" \
             RANLIB_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ranlib" \
             OBJDUMP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-objdump" \
-            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip"
+            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip" \
+            CFLAGS_FOR_TARGET="-O2 -mlongcalls" \
+            ASFLAGS_FOR_TARGET="-mlongcalls"
           make -j$(nproc) all-gcc
           make install-gcc
           make -j$(nproc) all-target-libgcc
@@ -397,7 +399,9 @@ jobs:
             AR_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ar" \
             RANLIB_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-ranlib" \
             OBJDUMP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-objdump" \
-            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip"
+            STRIP_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-strip" \
+            CFLAGS_FOR_TARGET="-O2 -mlongcalls" \
+            ASFLAGS_FOR_TARGET="-mlongcalls"
           make -j$(nproc) all-gcc
           make install-gcc
           make -j$(nproc) all-target-libgcc
