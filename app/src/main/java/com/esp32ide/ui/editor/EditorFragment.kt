@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.MainActivity
-import com.esp32ide.R
 import com.esp32ide.compiler.ArduinoCompiler
 import com.esp32ide.data.AppPreferences
 import com.esp32ide.data.Sketch
@@ -29,10 +28,10 @@ class EditorFragment : Fragment() {
     private val prefs by lazy { AppPreferences(requireContext()) }
     private val dao by lazy { SketchDatabase.getInstance(requireContext()).sketchDao() }
     private val compiler by lazy { ArduinoCompiler(requireContext()) }
-    private var currentSketchId: Int = -1
-    private var currentSketchName: String = "sketch"
+    private var currentSketchId = 0
+    private var currentSketchName = ""
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, s: Bundle?): View {
         _binding = FragmentEditorBinding.inflate(inflater, container, false)
         return binding.root
     }
@@ -47,106 +46,99 @@ class EditorFragment : Fragment() {
 
     private fun setupEditor() {
         binding.editor.apply {
-            // Font size from prefs
             setTextSize(prefs.fontSize.toFloat())
-
-            // Color scheme
             colorScheme = if (prefs.darkTheme) SchemeDarcula() else SchemeGitHub()
-
-            // Word wrap
             isWordwrap = prefs.wordWrap
 
-            // Basic C++ language (avoids crash if TextMate assets are missing)
             try {
-                // Try to use TextMate if registry is ready
+                // IMPORTANT: Syntax highlighting requires TextMateRegistry to be initialized in Application class.
+                // We attempt to load the C++ language.
                 setEditorLanguage(TextMateLanguage.create("source.cpp", true))
             } catch (e: Exception) {
-                // Fallback to plain text if grammar is missing to prevent crash
-                android.util.Log.e("EditorFragment", "TextMate language failed: ${e.message}. Using default.")
                 setEditorLanguage(null)
             }
         }
     }
 
     private fun setupToolbar() {
-        binding.btnCompile.setOnClickListener { compile() }
-        binding.btnFlash.setOnClickListener {
-            saveCurrentSketch()
-            (activity as MainActivity).navigateTo(R.id.nav_flash)
-        }
-        binding.btnMonitor.setOnClickListener {
-            saveCurrentSketch()
-            (activity as MainActivity).navigateTo(R.id.nav_monitor)
-        }
-        binding.btnNewFile.setOnClickListener { showNewFileDialog() }
         binding.btnUndo.setOnClickListener { binding.editor.undo() }
         binding.btnRedo.setOnClickListener { binding.editor.redo() }
         binding.btnSave.setOnClickListener {
             saveCurrentSketch()
             Toast.makeText(context, "Saved ✓", Toast.LENGTH_SHORT).show()
         }
+        
+        binding.btnNavigator.setOnClickListener { showNavigator() }
 
-        // Board name in toolbar
+        binding.btnNewFile.setOnClickListener { showNewFileDialog() }
+
         binding.tvBoardName.text = prefs.selectedBoard
     }
 
     private fun setupSymbolBar() {
-        val symbols = listOf("{","}"," (",")",";","<",">","\"","'","/","+","-","*","=","!","&","|",".","#","[","]","->","::")
-        binding.symbolBar.adapter = SymbolAdapter(symbols) { sym ->
-            binding.editor.insertText(sym, sym.length)
+        val symbols = listOf("{", "}", "(", ")", ";", ":", "<", ">", "\"", "'", "/", "+", "-", "*", "=", "!", "&", "|")
+        binding.symbolBar.adapter = SymbolAdapter(symbols) { s ->
+            binding.editor.pasteText(s)
         }
+    }
+
+    private fun showNavigator() {
+        val text = binding.editor.text.toString()
+        val symbols = mutableListOf<Pair<String, Int>>() // Name to Line
+        
+        // Regex for common C++ functions
+        val regex = Regex("""(void|int|float|String|bool|uint\d+_t)\s+([a-zA-Z0-9_]+)\s*\(""")
+        
+        val lines = text.split("\n")
+        lines.forEachIndexed { index, line ->
+            val match = regex.find(line)
+            if (match != null) {
+                symbols.add("${match.groupValues[1]} ${match.groupValues[2]}()" to index)
+            }
+        }
+        
+        if (symbols.isEmpty()) {
+            Toast.makeText(context, "No functions found in this file", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        val names = symbols.map { it.first }.toTypedArray()
+        android.app.AlertDialog.Builder(requireContext())
+            .setTitle("Code Navigator")
+            .setItems(names) { _, which ->
+                val line = symbols[which].second
+                binding.editor.jumpToLine(line)
+            }
+            .show()
     }
 
     private fun loadLastSketch() {
         lifecycleScope.launch {
-            val count = dao.getCount()
-            if (count == 0) {
-                // Insert default sketch
-                val id = dao.insertSketch(
-                    Sketch(
-                        name = "sketch_main",
-                        content = DEFAULT_SKETCH
-                    )
-                )
-                currentSketchId = id.toInt()
-                currentSketchName = "sketch_main"
-                _binding?.editor?.setText(DEFAULT_SKETCH)
+            val sketches = dao.getAllSketches().first()
+            if (sketches.isEmpty()) {
+                val default = Sketch(name = "sketch_main", content = DEFAULT_SKETCH)
+                val id = dao.insertSketch(default).toInt()
+                loadSketch(default.copy(id = id))
             } else {
-                // Get only the first emit from the flow
-                val sketches = dao.getAllSketches().first()
-                if (sketches.isNotEmpty() && currentSketchId == -1) {
-                    val s = sketches.first()
-                    currentSketchId = s.id
-                    currentSketchName = s.name
-                    withContext(Dispatchers.Main) {
-                        _binding?.let { b ->
-                            b.editor.setText(s.content)
-                            b.tvFileName.text = s.name
-                        }
-                    }
-                }
+                val lastId = prefs.lastSketchId
+                val last = sketches.find { it.id == lastId } ?: sketches[0]
+                loadSketch(last)
             }
         }
     }
 
-    fun loadSketch(sketch: Sketch) {
+    private fun loadSketch(sketch: Sketch) {
         currentSketchId = sketch.id
         currentSketchName = sketch.name
-        binding.editor.setText(sketch.content)
         binding.tvFileName.text = sketch.name
+        binding.editor.setText(sketch.content)
+        prefs.lastSketchId = sketch.id
     }
 
-    fun getEditorText(): String {
-        return if (_binding != null) {
-            binding.editor.text.toString()
-        } else {
-            ""
-        }
-    }
+    private fun getEditorText() = binding.editor.text.toString()
 
     private fun saveCurrentSketch() {
-        if (currentSketchId == -1) return
-        val content = binding.editor.text.toString()
+        val content = getEditorText()
         lifecycleScope.launch(Dispatchers.IO) {
             dao.updateContent(currentSketchId, content)
         }
@@ -173,9 +165,7 @@ class EditorFragment : Fragment() {
             val result = withContext(Dispatchers.IO) {
                 compiler.compile(code, fqbn) { line ->
                     lifecycleScope.launch(Dispatchers.Main) {
-                        _binding?.let { b ->
-                            b.tvCompileStatus.text = line.take(80)
-                        }
+                        _binding?.let { b -> b.tvCompileStatus.text = line.take(80) }
                     }
                 }
             }
@@ -184,44 +174,30 @@ class EditorFragment : Fragment() {
             _binding?.let { b ->
                 b.btnCompile.isEnabled = true
                 b.compileProgress.visibility = View.GONE
-
                 if (result.success) {
                     activity.lastCompiledBinPath = result.binPath
                     activity.lastCompiledBinSize = result.binSize
-                    val kb = result.binSize / 1024
-                    b.tvCompileStatus.text = "✓ Compiled! ${kb} KB — tap FLASH to upload"
-                    b.tvCompileStatus.setTextColor(resources.getColor(R.color.green, null))
-                    Toast.makeText(context, "Compiled! ${kb} KB", Toast.LENGTH_SHORT).show()
+                    b.tvCompileStatus.text = "✓ Compiled successfully!"
                 } else {
-                    b.tvCompileStatus.text = "✗ ${result.error.lines().firstOrNull() ?: "Compile failed"}"
-                    b.tvCompileStatus.setTextColor(resources.getColor(R.color.red, null))
-                    // Show error dialog
                     showCompileError(result.error)
+                    b.tvCompileStatus.text = "✗ Compile failed"
                 }
             }
         }
     }
 
     private fun showNewFileDialog() {
-        val dialog = NewFileDialog { name ->
+        NewFileDialog { name ->
             lifecycleScope.launch {
-                val id = dao.insertSketch(
-                    Sketch(name = name, content = "void setup() {\n  Serial.begin(115200);\n}\n\nvoid loop() {\n  \n}\n")
-                )
-                currentSketchId = id.toInt()
-                currentSketchName = name
-                withContext(Dispatchers.Main) {
-                    binding.editor.setText("void setup() {\n  Serial.begin(115200);\n}\n\nvoid loop() {\n  \n}\n")
-                    binding.tvFileName.text = name
-                    Toast.makeText(context, "Created: $name", Toast.LENGTH_SHORT).show()
-                }
+                val newSketch = Sketch(name = name, content = DEFAULT_SKETCH)
+                val id = dao.insertSketch(newSketch).toInt()
+                loadSketch(newSketch.copy(id = id))
             }
-        }
-        dialog.show(parentFragmentManager, "new_file")
+        }.show(parentFragmentManager, "new_file")
     }
 
     private fun showCompileError(error: String) {
-        androidx.appcompat.app.AlertDialog.Builder(requireContext())
+        android.app.AlertDialog.Builder(requireContext())
             .setTitle("Compile Error")
             .setMessage(error)
             .setPositiveButton("OK", null)
@@ -233,10 +209,7 @@ class EditorFragment : Fragment() {
         saveCurrentSketch()
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
+    override fun onDestroyView() { super.onDestroyView(); _binding = null }
 
     companion object {
         const val DEFAULT_SKETCH = """// ESP32 Blink
@@ -250,10 +223,9 @@ void setup() {
 
 void loop() {
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(500);
+  delay(1000);
   digitalWrite(LED_BUILTIN, LOW);
-  delay(500);
-  Serial.println("tick");
+  delay(1000);
 }"""
     }
 }

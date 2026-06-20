@@ -99,6 +99,10 @@ class AppPreferences(context: Context) {
         get() = prefs.getInt("last_bin_size", 0)
         set(v) = prefs.edit().putInt("last_bin_size", v).apply()
 
+    var lastSketchId: Int
+        get() = prefs.getInt("last_sketch_id", 0)
+        set(v) = prefs.edit().putInt("last_sketch_id", v).apply()
+
     var onboardingDone: Boolean
         get() = prefs.getBoolean("onboarding_done", false)
         set(v) = prefs.edit().putBoolean("onboarding_done", v).apply()

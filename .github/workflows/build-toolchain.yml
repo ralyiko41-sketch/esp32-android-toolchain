@@ -8,7 +8,7 @@ on:
 env:
   ESP_GCC_TAG:      "esp-2021r2"
   ESP_BINUTILS_TAG: "esp-2021r2-binutils"
-  NEWLIB_VERSION:   "4.1.0"
+  ESP_NEWLIB_TAG:   "esp-2021r2"
   GMP_VERSION:      "6.2.1"
   MPFR_VERSION:     "4.2.0"
   MPC_VERSION:      "1.3.1"
@@ -166,7 +166,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/tarballs
-          key: src-${{ env.ESP_GCC_TAG }}-${{ env.ESP_BINUTILS_TAG }}-newlib-${{ env.NEWLIB_VERSION }}-isl${{ env.ISL_VERSION }}-v1
+          key: src-${{ env.ESP_GCC_TAG }}-${{ env.ESP_BINUTILS_TAG }}-newlib-${{ env.ESP_NEWLIB_TAG }}-isl${{ env.ISL_VERSION }}-v2
 
       - name: Download source tarballs
         if: steps.cache-src.outputs.cache-hit != 'true'
@@ -180,7 +180,7 @@ jobs:
 
           wget_r "https://codeload.github.com/espressif/gcc/tar.gz/refs/tags/${ESP_GCC_TAG}" "esp-gcc.tar.gz"
           wget_r "https://codeload.github.com/espressif/binutils-gdb/tar.gz/refs/tags/${ESP_BINUTILS_TAG}" "esp-binutils.tar.gz"
-          wget_r "https://sourceware.org/pub/newlib/newlib-${NEWLIB_VERSION}.tar.gz" "newlib.tar.gz"
+          wget_r "https://codeload.github.com/espressif/newlib-esp32/tar.gz/refs/tags/${ESP_NEWLIB_TAG}" "newlib.tar.gz"
           wget_r "https://ftpmirror.gnu.org/gmp/gmp-${GMP_VERSION}.tar.xz" "gmp.tar.xz"
           wget_r "https://www.mpfr.org/mpfr-${MPFR_VERSION}/mpfr-${MPFR_VERSION}.tar.xz" "mpfr.tar.xz"
           wget_r "https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz" "mpc.tar.gz"
@@ -482,5 +482,5 @@ jobs:
             | **Target** | xtensa-esp-elf |
             | **GCC** | ${{ env.ESP_GCC_TAG }} |
             | **Binutils** | ${{ env.ESP_BINUTILS_TAG }} |
-            | **Newlib** | ${{ env.NEWLIB_VERSION }} |
+            | **Newlib** | ${{ env.ESP_NEWLIB_TAG }} (espressif/newlib-esp32) |
             | **NDK** | ${{ env.NDK_VERSION }} |
