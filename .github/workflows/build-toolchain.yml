@@ -363,8 +363,7 @@ jobs:
             --build=x86_64-linux-gnu \
             --host="${TARGET}" \
             --target="${TARGET}" \
-            --prefix="${PREFIX}" \
-            --with-target-subdir="${TARGET}" \
+            --prefix="${PREFIX}/${TARGET}" \
             --enable-newlib-io-long-long \
             --enable-newlib-register-fini \
             --disable-newlib-supplied-syscalls \
