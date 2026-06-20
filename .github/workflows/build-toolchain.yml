@@ -364,6 +364,7 @@ jobs:
             --host="${TARGET}" \
             --target="${TARGET}" \
             --prefix="${PREFIX}" \
+            --with-target-subdir="${TARGET}" \
             --enable-newlib-io-long-long \
             --enable-newlib-register-fini \
             --disable-newlib-supplied-syscalls \
@@ -379,7 +380,11 @@ jobs:
           make install
 
           if [ ! -f "${PREFIX}/${TARGET}/include/stdio.h" ]; then
-            echo "ERROR: stdio.h not found"
+            echo "ERROR: stdio.h not found at expected path ${PREFIX}/${TARGET}/include/stdio.h"
+            echo "--- Searching for stdio.h anywhere under PREFIX ---"
+            find "${PREFIX}" -name "stdio.h" 2>/dev/null
+            echo "--- Tree of PREFIX (3 levels) ---"
+            find "${PREFIX}" -maxdepth 3
             exit 1
           fi
           ln -sf "${PREFIX}/${TARGET}/include" "${PREFIX}/${TARGET}/sys-include"
