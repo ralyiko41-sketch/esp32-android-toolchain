@@ -3,14 +3,18 @@ package com.esp32ide
 import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.view.View
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.ui.platform.ComposeView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.data.AppPreferences
 import com.esp32ide.databinding.ActivityMainBinding
 import com.esp32ide.serial.UsbSerialManager
 import com.esp32ide.ui.boards.BoardManagerFragment
+import com.esp32ide.ui.compose.IDEMenuBar
 import com.esp32ide.ui.editor.EditorFragment
 import com.esp32ide.ui.examples.ExamplesFragment
 import com.esp32ide.ui.flash.FlashFragment
@@ -51,9 +55,10 @@ class MainActivity : AppCompatActivity() {
         serialManager = UsbSerialManager(this)
 
         setupDrawer()
+        setupComposeMenu()
+        setupBackNavigation()
 
         if (savedInstanceState == null) {
-            // First run? Initialize DB or preferences if needed
             lifecycleScope.launch {
                 // Pre-warm DB
                 com.esp32ide.data.SketchDatabase.getInstance(this@MainActivity).sketchDao().getCount()
@@ -93,6 +98,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupComposeMenu() {
+        // Add the Compose 3-dot menu to the Toolbar
+        val composeView = ComposeView(this).apply {
+            setContent {
+                IDEMenuBar()
+            }
+        }
+        binding.toolbar.addView(composeView, android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        // Position it to the right
+        composeView.layoutParams = (composeView.layoutParams as? androidx.appcompat.widget.Toolbar.LayoutParams)?.apply {
+            gravity = android.view.Gravity.END
+        } ?: androidx.appcompat.widget.Toolbar.LayoutParams(
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        ).apply {
+            gravity = android.view.Gravity.END
+        }
+    }
+
+    private fun setupBackNavigation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val currentFragment = supportFragmentManager.findFragmentById(R.id.fragment_container)
+                if (currentFragment !is EditorFragment) {
+                    // Navigate back to Editor
+                    navigateTo(R.id.nav_editor)
+                } else {
+                    // Already on Editor, perform standard back (exit)
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
+    }
+
     fun loadFragment(fragment: Fragment) {
         val tag = if (fragment is EditorFragment) "editor" else null
         supportFragmentManager.beginTransaction()
@@ -117,13 +161,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleUsbAttached() {
-        // Auto-navigate to flash tab when device plugged in
         navigateTo(R.id.nav_flash)
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
             handleUsbAttached()
         }
     }

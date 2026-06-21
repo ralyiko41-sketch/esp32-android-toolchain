@@ -5,7 +5,8 @@ import android.util.Log
 import com.esp32ide.compiler.ArduinoToolsInstaller
 import com.esp32ide.data.AppPreferences
 import com.esp32ide.data.SketchDatabase
-
+import io.github.rosemoe.sora.langs.textmate.registry.GrammarRegistry
+import io.github.rosemoe.sora.langs.textmate.registry.ThemeRegistry
 import java.io.File
 
 class ESP32IDEApp : Application() {
@@ -24,6 +25,15 @@ class ESP32IDEApp : Application() {
         instance = this
         db = SketchDatabase.getInstance(this)
         prefs = AppPreferences(this)
+
+        // Initialize TextMate Registries for Syntax Highlighting
+        try {
+            // This prepares the engine to load grammars from assets or storage
+            ThemeRegistry.getInstance()
+            GrammarRegistry.getInstance()
+        } catch (e: Exception) {
+            Log.e("ESP32IDE", "Failed to initialize TextMate registries: ${e.message}")
+        }
 
         // Move tools installation OFF the main thread to avoid skipped frames
         Thread {
@@ -47,7 +57,6 @@ class ESP32IDEApp : Application() {
             val correctDir = File(baseDir, "3.2.0")
             if (wrongDir.exists() && !correctDir.exists()) {
                 wrongDir.renameTo(correctDir)
-                Log.d("ESP32IDE", "Fixed version directory structure: renamed esp32-3.2.0 to 3.2.0")
             }
 
             val toolsReady = ArduinoToolsInstaller.installIfNeeded(this)

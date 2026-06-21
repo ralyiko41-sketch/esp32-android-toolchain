@@ -47,7 +47,7 @@
             android:visibility="gone"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:textColor="@color/red" />
-        <ImageButton android:id="@+id/btn_clear" style="@style/ToolbarIconBtn"
+        <ImageButton android:id="@+id/btn_clear" style="@style/ToolbarIconBtn.White"
             android:src="@drawable/ic_clear" android:layout_marginStart="4dp" />
     </LinearLayout>
 

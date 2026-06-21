@@ -414,7 +414,7 @@ jobs:
             --disable-libatomic \
             --disable-nls --disable-werror --disable-multilib \
             CC="aarch64-linux-android-gcc" \
-            CXX="aarch64-linux-android-g++" \
+            CXX="aarch64-linux-android-g++ -std=gnu++14" \
             AR="${WRAP}/aarch64-linux-android-ar" \
             RANLIB="${WRAP}/aarch64-linux-android-ranlib" \
             NM_FOR_TARGET="${BUILD_TIME_TOOLS}/${TARGET}-nm" \

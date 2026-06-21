@@ -19,6 +19,7 @@
             app:title="ESP32 IDE"
             app:titleTextColor="@color/text_primary"
             app:navigationIcon="@drawable/ic_menu"
+            app:navigationIconTint="@android:color/white"
             app:layout_constraintTop_toTopOf="parent" />
 
         <FrameLayout

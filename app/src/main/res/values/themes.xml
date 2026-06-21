@@ -28,4 +28,8 @@
         <item name="android:tint">@color/text_secondary</item>
         <item name="android:padding">6dp</item>
     </style>
+
+    <style name="ToolbarIconBtn.White">
+        <item name="android:tint">@android:color/white</item>
+    </style>
 </resources>

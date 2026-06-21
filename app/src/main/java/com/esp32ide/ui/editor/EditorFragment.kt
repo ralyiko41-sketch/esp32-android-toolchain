@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.MainActivity
+import com.esp32ide.R
 import com.esp32ide.compiler.ArduinoCompiler
 import com.esp32ide.data.AppPreferences
 import com.esp32ide.data.Sketch
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class EditorFragment : Fragment() {
 
@@ -40,6 +42,7 @@ class EditorFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         setupEditor()
         setupToolbar()
+        setupActionButtons()
         setupSymbolBar()
         loadLastSketch()
     }
@@ -49,14 +52,9 @@ class EditorFragment : Fragment() {
             setTextSize(prefs.fontSize.toFloat())
             colorScheme = if (prefs.darkTheme) SchemeDarcula() else SchemeGitHub()
             isWordwrap = prefs.wordWrap
-
-            try {
-                // IMPORTANT: Syntax highlighting requires TextMateRegistry to be initialized in Application class.
-                // We attempt to load the C++ language.
-                setEditorLanguage(TextMateLanguage.create("source.cpp", true))
-            } catch (e: Exception) {
-                setEditorLanguage(null)
-            }
+            
+            // Use our custom ArduinoLanguage for robust syntax highlighting
+            setEditorLanguage(ArduinoLanguage())
         }
     }
 
@@ -75,6 +73,16 @@ class EditorFragment : Fragment() {
         binding.tvBoardName.text = prefs.selectedBoard
     }
 
+    private fun setupActionButtons() {
+        binding.btnCompile.setOnClickListener { compile() }
+        binding.btnFlash.setOnClickListener {
+            (activity as? MainActivity)?.navigateTo(R.id.nav_flash)
+        }
+        binding.btnMonitor.setOnClickListener {
+            (activity as? MainActivity)?.navigateTo(R.id.nav_monitor)
+        }
+    }
+
     private fun setupSymbolBar() {
         val symbols = listOf("{", "}", "(", ")", ";", ":", "<", ">", "\"", "'", "/", "+", "-", "*", "=", "!", "&", "|")
         binding.symbolBar.adapter = SymbolAdapter(symbols) { s ->
@@ -86,7 +94,7 @@ class EditorFragment : Fragment() {
         val text = binding.editor.text.toString()
         val symbols = mutableListOf<Pair<String, Int>>() // Name to Line
         
-        // Regex for common C++ functions
+        // Match common C++ function patterns: void setup(), int getVal(), etc.
         val regex = Regex("""(void|int|float|String|bool|uint\d+_t)\s+([a-zA-Z0-9_]+)\s*\(""")
         
         val lines = text.split("\n")
@@ -107,7 +115,9 @@ class EditorFragment : Fragment() {
             .setTitle("Code Navigator")
             .setItems(names) { _, which ->
                 val line = symbols[which].second
+                // Jump to line (0-indexed)
                 binding.editor.jumpToLine(line)
+                Toast.makeText(context, "Jumped to ${symbols[which].first}", Toast.LENGTH_SHORT).show()
             }
             .show()
     }
@@ -135,7 +145,7 @@ class EditorFragment : Fragment() {
         prefs.lastSketchId = sketch.id
     }
 
-    private fun getEditorText() = binding.editor.text.toString()
+    fun getEditorText() = binding.editor.text.toString()
 
     private fun saveCurrentSketch() {
         val content = getEditorText()
