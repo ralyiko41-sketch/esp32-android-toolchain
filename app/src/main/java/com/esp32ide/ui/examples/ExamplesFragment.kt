@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import com.esp32ide.MainActivity
 import com.esp32ide.R
+import com.esp32ide.data.AppPreferences
 import com.esp32ide.data.Sketch
 import com.esp32ide.data.SketchDatabase
 import com.esp32ide.databinding.FragmentExamplesBinding
@@ -34,9 +35,12 @@ class ExamplesFragment : Fragment() {
                 .setPositiveButton("Load") { _, _ ->
                     lifecycleScope.launch {
                         val dao = SketchDatabase.getInstance(requireContext()).sketchDao()
-                        dao.insertSketch(
+                        val id = dao.insertSketch(
                             Sketch(name = example.key, content = example.code)
                         )
+                        // CRITICAL: Update lastSketchId so Editor loads THIS example
+                        AppPreferences(requireContext()).lastSketchId = id.toInt()
+
                         requireActivity().runOnUiThread {
                             Toast.makeText(context, "Loaded: ${example.name}", Toast.LENGTH_SHORT).show()
                             (activity as MainActivity).navigateTo(R.id.nav_editor)
