@@ -442,14 +442,42 @@ jobs:
       - name: Verify toolchain
         run: |
           GCC="${PREFIX}/bin/${TARGET}-gcc"
+
+          echo "=== File type of the installed (Android-hosted) compiler ==="
           file "${GCC}"
+
           echo "=== Checking Bionic linkage ==="
           readelf -d "${GCC}" | grep -q "libc.so" && echo "Bionic libc detected" || echo "WARNING: libc.so not found in NEEDED"
-          echo "=== Testing compile ==="
+
+          echo "=== Checking ELF interpreter (must be Android's Bionic linker) ==="
+          readelf -p .interp "${GCC}" 2>/dev/null | grep -q "linker64" && echo "Bionic linker64 interpreter confirmed" || echo "WARNING: expected Bionic linker64 interpreter not found"
+
+          # NOTE: We deliberately do NOT execute ${GCC} here. It is an Android
+          # ARM64 binary - it physically cannot run on this x86_64 CI runner,
+          # and even with CPU emulation its ELF interpreter (/system/bin/linker64)
+          # only exists on a real Android system image. The only valid place to
+          # functionally test-run this compiler is an actual Android device or
+          # emulator, never the build machine. Here we only check static
+          # properties of the files we just produced.
+
+          echo "=== Verifying installed target libraries are genuine Xtensa object code ==="
+          LIBGCC=$(find "${PREFIX}/lib/gcc/${TARGET}" -name "libgcc.a" | head -1)
+          if [ -z "${LIBGCC}" ]; then
+            echo "ERROR: libgcc.a not found under ${PREFIX}/lib/gcc/${TARGET}"
+            exit 1
+          fi
+          file "${LIBGCC}"
+
+          # Use the NATIVE build-time compiler (runs on this x86_64 runner) to
+          # actually compile something and confirm it emits real Xtensa object
+          # code. This proves the GCC *source*/toolchain definitions are sound,
+          # without needing to execute the Android-hosted binary.
+          echo "=== Test-compiling with the native (x86_64-runnable) Xtensa compiler ==="
           echo 'int add(int a,int b){return a+b;}' > /tmp/test.c
-          "${GCC}" -c -nostdlib /tmp/test.c -o /tmp/test.o
-          file /tmp/test.o | grep -q "ELF" && echo "Compiles Xtensa object OK" || exit 1
-          echo "Toolchain verified"
+          "${BUILD_TIME_TOOLS}/${TARGET}-gcc" -c -nostdlib /tmp/test.c -o /tmp/test.o
+          file /tmp/test.o | grep -qi "xtensa" && echo "Compiles genuine Xtensa object OK" || { echo "ERROR: output is not Xtensa object code"; file /tmp/test.o; exit 1; }
+
+          echo "Toolchain verified (static checks only - functional test requires an Android device)"
 
       - name: Package toolchain
         run: |

@@ -28,7 +28,6 @@ sealed class MenuLevel {
     data object File : MenuLevel()
     data object Edit : MenuLevel()
     data object Actions : MenuLevel()
-    data object Upload : MenuLevel()
     data object LibraryExamples : MenuLevel()
 }
 
@@ -60,7 +59,6 @@ fun IDEMenuBar(modifier: Modifier = Modifier) {
                 MenuLevel.File -> FileMenu(onNavigate = { level = it }, onAction = { expanded = false })
                 MenuLevel.Edit -> EditMenu(onNavigate = { level = it }, onAction = { expanded = false })
                 MenuLevel.Actions -> ActionsMenu(onNavigate = { level = it }, onAction = { expanded = false })
-                MenuLevel.Upload -> UploadMenu(onNavigate = { level = it }, onAction = { expanded = false })
                 MenuLevel.LibraryExamples -> LibraryExamplesMenu(onNavigate = { level = it }, onAction = { expanded = false })
                 else -> {}
             }
@@ -146,18 +144,8 @@ fun EditMenu(onNavigate: (MenuLevel) -> Unit, onAction: () -> Unit) {
 fun ActionsMenu(onNavigate: (MenuLevel) -> Unit, onAction: () -> Unit) {
     BackMenuItem { onNavigate(MenuLevel.Root) }
     DropdownMenuItem(text = { Text("Code complete") }, onClick = onAction)
-    DropdownMenuItem(text = { Text("Compile") }, onClick = onAction)
+    DropdownMenuItem(text = { Text("Upload over WiFi") }, onClick = onAction)
     DropdownMenuItem(text = { Text("Clear compile cache") }, onClick = onAction)
-    DropdownMenuItem(
-        text = { Text("Upload >") },
-        onClick = { onNavigate(MenuLevel.Upload) },
-        trailingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowRight, null) }
-    )
-}
-
-@Composable
-fun UploadMenu(onNavigate: (MenuLevel) -> Unit, onAction: () -> Unit) {
-    BackMenuItem { onNavigate(MenuLevel.Actions) }
     DropdownMenuItem(text = { Text("Upload precompiled") }, onClick = onAction)
 }
 

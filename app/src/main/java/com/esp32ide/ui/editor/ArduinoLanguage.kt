@@ -4,13 +4,16 @@ import android.os.Bundle
 import io.github.rosemoe.sora.lang.EmptyLanguage
 import io.github.rosemoe.sora.lang.Language
 import io.github.rosemoe.sora.lang.analysis.AnalyzeManager
+import io.github.rosemoe.sora.lang.analysis.AsyncIncrementalAnalyzeManager
+import io.github.rosemoe.sora.lang.analysis.IncrementalAnalyzeManager.LineTokenizeResult
 import io.github.rosemoe.sora.lang.completion.CompletionPublisher
 import io.github.rosemoe.sora.lang.format.Formatter
 import io.github.rosemoe.sora.lang.smartEnter.NewlineHandler
-import io.github.rosemoe.sora.lang.styling.Styles
+import io.github.rosemoe.sora.lang.styling.CodeBlock
+import io.github.rosemoe.sora.lang.styling.Span
 import io.github.rosemoe.sora.lang.styling.TextStyle
-import io.github.rosemoe.sora.lang.util.BaseAnalyzeManager
 import io.github.rosemoe.sora.text.CharPosition
+import io.github.rosemoe.sora.text.Content
 import io.github.rosemoe.sora.text.ContentReference
 import io.github.rosemoe.sora.widget.SymbolPairMatch
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
@@ -52,7 +55,7 @@ class ArduinoLanguage : Language {
     override fun useTab(): Boolean = true
 }
 
-class ArduinoAnalyzeManager : BaseAnalyzeManager() {
+class ArduinoAnalyzeManager : AsyncIncrementalAnalyzeManager<Int, Span>() {
     
     private val keywords = listOf(
         "if", "else", "for", "while", "do", "switch", "case", "default", "break",
@@ -69,7 +72,8 @@ class ArduinoAnalyzeManager : BaseAnalyzeManager() {
     private val builtins = listOf(
         "setup", "loop", "pinMode", "digitalWrite", "digitalRead", "analogRead",
         "analogWrite", "delay", "delayMicroseconds", "millis", "micros", "Serial",
-        "HIGH", "LOW", "INPUT", "OUTPUT", "INPUT_PULLUP", "LED_BUILTIN", "print", "println", "begin"
+        "HIGH", "LOW", "INPUT", "OUTPUT", "INPUT_PULLUP", "LED_BUILTIN", "print", "println", "begin",
+        "WiFi", "HTTPClient", "Wire", "Adafruit_BME280", "ESP32Servo", "Servo", "PubSubClient", "ArduinoOTA", "TaskHandle_t", "xTaskCreatePinnedToCore", "vTaskDelay"
     )
 
     // Sora Editor color styles
@@ -93,56 +97,49 @@ class ArduinoAnalyzeManager : BaseAnalyzeManager() {
         Pattern.DOTALL
     )
 
-    override fun insert(start: CharPosition, end: CharPosition, insertedContent: CharSequence) {
-        rerun()
-    }
+    override fun getInitialState(): Int = 0
 
-    override fun delete(start: CharPosition, end: CharPosition, deletedContent: CharSequence) {
-        rerun()
-    }
+    override fun stateEquals(state: Int?, another: Int?): Boolean = state == another
 
-    override fun rerun() {
-        val receiver = getReceiver()
-        val ref = getContentRef()
-        if (receiver != null && ref != null) {
-            val styles = Styles()
-            val builder = io.github.rosemoe.sora.lang.styling.MappedSpans.Builder()
-            
-            for (i in 0 until ref.getLineCount()) {
-                val lineText = ref.getLine(i)
-                val matcher = pattern.matcher(lineText)
-                var lastEnd = 0
-                
-                builder.addIfNeeded(i, 0, STYLE_NORMAL)
-                
-                while (matcher.find()) {
-                    if (matcher.start() > lastEnd) {
-                        builder.addIfNeeded(i, lastEnd, STYLE_NORMAL)
-                    }
-                    
-                    val style = when {
-                        matcher.group(1) != null -> STYLE_COMMENT
-                        matcher.group(2) != null -> STYLE_STRING
-                        matcher.group(3) != null -> STYLE_KEYWORD
-                        matcher.group(4) != null -> STYLE_TYPE
-                        matcher.group(5) != null -> STYLE_BUILTIN
-                        matcher.group(6) != null -> STYLE_NUMBER
-                        matcher.group(7) != null -> STYLE_PREPROCESSOR
-                        else -> STYLE_NORMAL
-                    }
-                    
-                    builder.addIfNeeded(i, matcher.start(), style)
-                    lastEnd = matcher.end()
-                }
-                
-                if (lastEnd < lineText.length) {
-                    builder.addIfNeeded(i, lastEnd, STYLE_NORMAL)
-                }
+    override fun tokenizeLine(line: CharSequence, state: Int?, lineIndex: Int): LineTokenizeResult<Int, Span> {
+        val spans = mutableListOf<Span>()
+        val matcher = pattern.matcher(line)
+        var lastEnd = 0
+        
+        while (matcher.find()) {
+            val start = matcher.start()
+            if (start > lastEnd) {
+                spans.add(Span.obtain(lastEnd, STYLE_NORMAL))
             }
             
-            styles.spans = builder.build()
-            receiver.setStyles(this, styles)
+            val style = when {
+                matcher.group(1) != null -> STYLE_COMMENT
+                matcher.group(2) != null -> STYLE_STRING
+                matcher.group(3) != null -> STYLE_KEYWORD
+                matcher.group(4) != null -> STYLE_TYPE
+                matcher.group(5) != null -> STYLE_BUILTIN
+                matcher.group(6) != null -> STYLE_NUMBER
+                matcher.group(7) != null -> STYLE_PREPROCESSOR
+                else -> STYLE_NORMAL
+            }
+            
+            spans.add(Span.obtain(start, style))
+            lastEnd = matcher.end()
         }
+        
+        if (lastEnd < line.length || spans.isEmpty()) {
+            spans.add(Span.obtain(lastEnd, STYLE_NORMAL))
+        }
+        
+        return LineTokenizeResult(0, spans)
+    }
+
+    override fun generateSpansForLine(result: LineTokenizeResult<Int, Span>): List<Span> {
+        return result.tokens ?: emptyList()
+    }
+
+    override fun computeBlocks(content: Content, delegate: AsyncIncrementalAnalyzeManager<Int, Span>.CodeBlockAnalyzeDelegate): List<CodeBlock> {
+        return emptyList()
     }
 
     override fun destroy() {

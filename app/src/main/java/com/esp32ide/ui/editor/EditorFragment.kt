@@ -50,11 +50,11 @@ class EditorFragment : Fragment() {
     private fun setupEditor() {
         binding.editor.apply {
             setTextSize(prefs.fontSize.toFloat())
-            colorScheme = if (prefs.darkTheme) SchemeDarcula() else SchemeGitHub()
             isWordwrap = prefs.wordWrap
             
-            // Use our custom ArduinoLanguage for robust syntax highlighting
+            // Reorder: Set language FIRST, then color scheme to ensure styles are applied
             setEditorLanguage(ArduinoLanguage())
+            colorScheme = if (prefs.darkTheme) SchemeDarcula() else SchemeGitHub()
         }
     }
 
