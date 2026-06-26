@@ -1,5 +1,0 @@
--keep class com.esp32ide.** { *; }
--keep class com.hoho.android.usbserial.** { *; }
--keepclassmembers class * extends androidx.room.RoomDatabase { *; }
--dontwarn org.apache.commons.**
--keep class org.apache.commons.compress.** { *; }
