@@ -24,7 +24,9 @@
             android:fontFamily="monospace"
             android:textSize="13sp"
             android:ellipsize="start"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:clickable="true"
+            android:focusable="true" />
 
         <ImageButton android:id="@+id/btn_undo"     style="@style/ToolbarIconBtn" android:src="@drawable/ic_undo" />
         <ImageButton android:id="@+id/btn_redo"     style="@style/ToolbarIconBtn" android:src="@drawable/ic_redo" />
@@ -32,6 +34,8 @@
         <ImageButton android:id="@+id/btn_navigator" style="@style/ToolbarIconBtn" android:src="@drawable/ic_menu" android:contentDescription="Navigator" />
         <ImageButton android:id="@+id/btn_new_file" style="@style/ToolbarIconBtn" android:src="@drawable/ic_add" />
     </LinearLayout>
+
+    <!-- File Tabs Bar Removed, replaced by swipe on tv_file_name -->
 
     <!-- Board name bar -->
     <LinearLayout

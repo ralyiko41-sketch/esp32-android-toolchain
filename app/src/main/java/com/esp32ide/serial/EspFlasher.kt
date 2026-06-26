@@ -1,359 +1,267 @@
 package com.esp32ide.serial
 
-import kotlinx.coroutines.*
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.zip.Deflater
 
-/**
- * ESP32 ROM Bootloader Flasher
- * Implements the ESP8266/ESP32 serial protocol used by esptool.py
- * Supports: ESP32, ESP32-S2, ESP32-S3, ESP32-C3, ESP32-C6
- */
-class EspFlasher(private val serial: UsbSerialManager) {
+data class FlashResult(val success: Boolean, val message: String, val error: String = "")
 
-    companion object {
-        // Slip framing
-        const val SLIP_END     = 0xC0.toByte()
-        const val SLIP_ESC     = 0xDB.toByte()
-        const val SLIP_ESC_END = 0xDC.toByte()
-        const val SLIP_ESC_ESC = 0xDD.toByte()
+class EspFlasher(private val serialManager: UsbSerialManager) {
 
-        // Commands
-        const val CMD_FLASH_BEGIN    = 0x02.toByte()
-        const val CMD_FLASH_DATA     = 0x03.toByte()
-        const val CMD_FLASH_END      = 0x04.toByte()
-        const val CMD_MEM_BEGIN      = 0x05.toByte()
-        const val CMD_MEM_END        = 0x06.toByte()
-        const val CMD_MEM_DATA       = 0x07.toByte()
-        const val CMD_SYNC           = 0x08.toByte()
-        const val CMD_WRITE_REG      = 0x09.toByte()
-        const val CMD_READ_REG       = 0x0A.toByte()
-        const val CMD_SPI_SET_PARAMS = 0x0B.toByte()
-        const val CMD_SPI_ATTACH     = 0x0D.toByte()
-        const val CMD_FLASH_DEFL_BEGIN = 0x10.toByte()
-        const val CMD_FLASH_DEFL_DATA  = 0x11.toByte()
-        const val CMD_FLASH_DEFL_END   = 0x12.toByte()
-        const val CMD_CHANGE_BAUDRATE  = 0x0F.toByte()
+    private val TAG = "EspFlasher"
+    private val SECTOR_SIZE = 4096
+    private val PACKET_SIZE = 1024
 
-        const val FLASH_BLOCK_SIZE = 0x4000  // 16KB blocks
-        const val FLASH_SECTOR_SIZE = 0x1000 // 4KB
+    private object Cmd {
+        const val SYNC           = 0x08
+        const val SPI_ATTACH     = 0x0D
+        const val SPI_SET_PARAMS = 0x0B
+        const val FLASH_BEGIN    = 0x02
+        const val FLASH_DATA     = 0x03
+        const val FLASH_END      = 0x04
     }
 
-    data class FlashResult(
-        val success: Boolean,
-        val message: String = "",
-        val error: String = ""
-    )
+    private object Slip {
+        const val END     = 0xC0.toByte()
+        const val ESC     = 0xDB.toByte()
+        const val ESC_END = 0xDC.toByte()
+        const val ESC_ESC = 0xDD.toByte()
+    }
 
-    // ── Main flash entry point ────────────────────────────────────────────
+    // =========================================================================
+    // CALLED BY FlashFragment — matches existing signature exactly
+    // =========================================================================
     suspend fun flash(
         firmwarePath: String,
-        flashBaud: Int = 921600,
+        flashBaud: Int = 115200,           // kept for compatibility, not used
         onProgress: (String) -> Unit,
         onPercent: (Int) -> Unit
+    ): FlashResult = flash(
+        binFile     = File(firmwarePath),
+        flashOffset = 0x10000,
+        onProgress  = onProgress,
+        onPercent   = onPercent
+    )
+
+    // =========================================================================
+    // CORE FLASH LOGIC
+    // =========================================================================
+    suspend fun flash(
+        binFile: File,
+        flashOffset: Long = 0x10000,
+        onProgress: (String) -> Unit = {},
+        onPercent: (Int) -> Unit = {}
     ): FlashResult = withContext(Dispatchers.IO) {
-
-        val firmware = File(firmwarePath)
-        if (!firmware.exists()) {
-            return@withContext FlashResult(false, error = "Firmware file not found: $firmwarePath")
-        }
-
         try {
-            onProgress("Entering bootloader mode...")
+            if (!binFile.exists())
+                return@withContext FlashResult(false, "", "File missing: ${binFile.path}")
 
-            // Enter bootloader: DTR=HIGH, RTS=LOW → DTR=LOW, RTS=HIGH → DTR=HIGH, RTS=LOW
+            val rawBytes = binFile.readBytes()
+            if (rawBytes.isEmpty())
+                return@withContext FlashResult(false, "", "File is empty.")
+
+            // Step 1 — Pad to sector boundary (fixes status=1)
+            val alignedBytes = padToSector(rawBytes)
+            val totalPackets = alignedBytes.size / PACKET_SIZE
+
+            onProgress("Entering bootloader mode...")
             enterBootloader()
-            delay(500)
 
             onProgress("Connecting to ESP32 ROM bootloader...")
-
-            // Try to sync
-            var synced = false
-            repeat(5) {
-                if (!synced) {
-                    synced = sync()
-                    if (!synced) delay(200)
-                }
+            if (!handshakeSync()) {
+                return@withContext FlashResult(false, "", "ESP32 did not answer SYNC.\nCheck USB cable and CH340 driver.")
             }
-
-            if (!synced) {
-                // Try harder reset
-                enterBootloader()
-                delay(1000)
-                repeat(10) {
-                    if (!synced) {
-                        synced = sync()
-                        if (!synced) delay(100)
-                    }
-                }
-            }
-
-            if (!synced) {
-                return@withContext FlashResult(
-                    false,
-                    error = "Cannot connect to ESP32.\n\n" +
-                            "• Hold BOOT button on ESP32 while connecting\n" +
-                            "• Check USB cable (use data cable, not charge-only)\n" +
-                            "• Try a different baud rate in Settings\n" +
-                            "• Make sure Serial Monitor is disconnected"
-                )
-            }
-
             onProgress("✓ Connected to ROM bootloader!")
-            onPercent(5)
 
-            // Change to higher baud for faster flashing
-            if (flashBaud > 115200) {
-                onProgress("Switching to $flashBaud baud...")
-                changeBaud(flashBaud)
-                delay(100)
-                serial.getPort()?.setParameters(flashBaud, 8, 1, 0)
-                delay(100)
-            }
-
-            // Attach SPI flash
+            // SPI Attach
             onProgress("Attaching SPI flash...")
-            spiAttach()
-            delay(100)
+            sendCmd(Cmd.SPI_ATTACH, ByteArray(8) { 0 })
+            getResp(Cmd.SPI_ATTACH, 2000)
+                ?: return@withContext FlashResult(false, "", "SPI Attach failed.")
 
-            // Flash the firmware
-            val firmwareBytes = firmware.readBytes()
-            onProgress("Flashing ${firmwareBytes.size / 1024} KB to 0x10000...")
-            onPercent(10)
+            // SPI Set Params — 4MB geometry
+            val geom = ByteArray(24).also {
+                writeIntLE(it,  0, 0)
+                writeIntLE(it,  4, 4 * 1024 * 1024)  // 4MB total
+                writeIntLE(it,  8, 64 * 1024)         // 64KB block
+                writeIntLE(it, 12, 4096)              // 4KB sector
+                writeIntLE(it, 16, 256)               // 256B page
+                writeIntLE(it, 20, 0xFFFF)            // status mask
+            }
+            sendCmd(Cmd.SPI_SET_PARAMS, geom)
+            getResp(Cmd.SPI_SET_PARAMS, 2000)
 
-            val flashSuccess = flashData(
-                data = firmwareBytes,
-                address = 0x10000,
-                onProgress = onProgress,
-                onPercent = { pct -> onPercent(10 + (pct * 0.85).toInt()) }
-            )
+            // Flash Begin
+            val sizeKb = rawBytes.size / 1024
+            onProgress("Flashing ${sizeKb} KB to 0x${flashOffset.toString(16)}...")
+            val beginPayload = ByteArray(16).also {
+                writeIntLE(it,  0, alignedBytes.size)   // sector-aligned erase size
+                writeIntLE(it,  4, totalPackets)
+                writeIntLE(it,  8, PACKET_SIZE)
+                writeIntLE(it, 12, flashOffset.toInt())
+            }
+            sendCmd(Cmd.FLASH_BEGIN, beginPayload)
+            getResp(Cmd.FLASH_BEGIN, 20000)
+                ?: return@withContext FlashResult(false, "", "Flash begin error: ROM rejected FLASH_BEGIN (status=1).\nPossible cause: offset not sector-aligned or flash locked.")
 
-            if (!flashSuccess) {
-                return@withContext FlashResult(false, error = "Flash write failed")
+            // Flash Data — push 1KB packets
+            for (seq in 0 until totalPackets) {
+                val idx        = seq * PACKET_SIZE
+                val packetData = alignedBytes.copyOfRange(idx, idx + PACKET_SIZE)
+
+                val pktHeader = ByteArray(16).also {
+                    writeIntLE(it,  0, PACKET_SIZE)
+                    writeIntLE(it,  4, seq)
+                    writeIntLE(it,  8, 0)
+                    writeIntLE(it, 12, 0)
+                }
+                sendCmd(Cmd.FLASH_DATA, pktHeader + packetData, calcChecksum(packetData))
+                getResp(Cmd.FLASH_DATA, 5000)
+                    ?: return@withContext FlashResult(false, "", "Packet $seq dropped — write failed.")
+
+                onPercent(((seq + 1) * 100) / totalPackets)
             }
 
-            onPercent(95)
-            onProgress("Verifying...")
-            delay(200)
+            // Flash End — reboot
+            sendCmd(Cmd.FLASH_END, ByteArray(4).also { writeIntLE(it, 0, 0) })
+            try { getResp(Cmd.FLASH_END, 1000) } catch (_: Exception) {}
 
-            // Also flash bootloader and partitions if available
-            val filesDir = firmware.parentFile
-            val bootloader = File(filesDir, "bootloader.bin")
-            val partitions = File(filesDir, "partitions.bin")
-
-            if (bootloader.exists()) {
-                onProgress("Flashing bootloader...")
-                flashData(bootloader.readBytes(), 0x1000, onProgress) {}
-            }
-
-            if (partitions.exists()) {
-                onProgress("Flashing partitions...")
-                flashData(partitions.readBytes(), 0x8000, onProgress) {}
-            }
-
-            // Reset device
-            onProgress("Rebooting ESP32...")
-            exitBootloader()
-            delay(500)
-            serial.getPort()?.setParameters(115200, 8, 1, 0)
-
-            onPercent(100)
-            FlashResult(true, message = "✓ Flash successful! ESP32 is rebooting...")
+            FlashResult(true, "✓ Flash successful! ${sizeKb} KB written. Chip rebooting...")
 
         } catch (e: Exception) {
-            FlashResult(false, error = "Flash error: ${e.message}")
+            Log.e(TAG, "Flash exception", e)
+            FlashResult(false, "", e.message ?: "Unknown serial exception")
         }
     }
 
-    // ── Bootloader entry (GPIO0 = LOW via RTS/DTR) ────────────────────────
-    private fun enterBootloader() {
-        // Classic esptool reset sequence
-        serial.setDTR(false); serial.setRTS(true);  Thread.sleep(100)
-        serial.setDTR(true);  serial.setRTS(false); Thread.sleep(100)
-        serial.setDTR(false);                        Thread.sleep(50)
+    // =========================================================================
+    // BOOTLOADER ENTRY — correct CH340 DTR/RTS sequence
+    // =========================================================================
+    private suspend fun enterBootloader() {
+        // Flush stale bytes from async IO manager
+        repeat(5) { serialManager.readRaw(30) }
+
+        serialManager.setDTR(true);  serialManager.setRTS(true);  delay(250)
+        serialManager.setDTR(true);  serialManager.setRTS(false); delay(600) // longer for CH340
+        serialManager.setDTR(false); serialManager.setRTS(false); delay(150)
+
+        // Flush bootloader splash bytes (ROM prints version info on reset)
+        delay(200)
+        repeat(5) { serialManager.readRaw(50) }
     }
 
-    private fun exitBootloader() {
-        serial.setRTS(false); serial.setDTR(false)
-        Thread.sleep(100)
-        // Hard reset
-        serial.setRTS(true);  Thread.sleep(100)
-        serial.setRTS(false)
-    }
-
-    // ── SLIP encode ───────────────────────────────────────────────────────
-    private fun slipEncode(data: ByteArray): ByteArray {
-        val out = mutableListOf(SLIP_END)
-        for (b in data) {
-            when (b) {
-                SLIP_END -> { out.add(SLIP_ESC); out.add(SLIP_ESC_END) }
-                SLIP_ESC -> { out.add(SLIP_ESC); out.add(SLIP_ESC_ESC) }
-                else -> out.add(b)
-            }
+    // =========================================================================
+    // SYNC HANDSHAKE
+    // =========================================================================
+    private suspend fun handshakeSync(): Boolean {
+        val syncMsg = ByteArray(36).also {
+            it[0] = 0x07; it[1] = 0x07; it[2] = 0x12; it[3] = 0x20
+            for (i in 4..35) it[i] = 0x55.toByte()
         }
-        out.add(SLIP_END)
-        return out.toByteArray()
-    }
-
-    private fun slipDecode(data: ByteArray): ByteArray {
-        val out = mutableListOf<Byte>()
-        var i = 0
-        while (i < data.size) {
-            when (data[i]) {
-                SLIP_END -> { i++; continue }
-                SLIP_ESC -> {
-                    i++
-                    if (i < data.size) {
-                        out.add(if (data[i] == SLIP_ESC_END) SLIP_END else SLIP_ESC)
-                    }
-                }
-                else -> out.add(data[i])
-            }
-            i++
+        repeat(10) { attempt ->
+            repeat(3) { serialManager.readRaw(30) } // flush before each attempt
+            sendCmd(Cmd.SYNC, syncMsg)
+            if (getResp(Cmd.SYNC, 400) != null) return true
+            delay((attempt + 1) * 50L)
         }
-        return out.toByteArray()
+        return false
     }
 
-    // ── Build command packet ──────────────────────────────────────────────
-    private fun buildPacket(cmd: Byte, data: ByteArray, checksum: Int = 0): ByteArray {
-        val packet = ByteArray(8 + data.size)
-        packet[0] = 0x00  // direction (request)
-        packet[1] = cmd
-        packet[2] = (data.size and 0xFF).toByte()
-        packet[3] = ((data.size shr 8) and 0xFF).toByte()
-        packet[4] = (checksum and 0xFF).toByte()
-        packet[5] = ((checksum shr 8) and 0xFF).toByte()
-        packet[6] = ((checksum shr 16) and 0xFF).toByte()
-        packet[7] = ((checksum shr 24) and 0xFF).toByte()
-        data.copyInto(packet, 8)
-        return packet
+    // =========================================================================
+    // SLIP FRAMING
+    // =========================================================================
+    private fun sendCmd(cmd: Int, payload: ByteArray, cs: Long = 0) {
+        val frame = ByteArray(8 + payload.size)
+        frame[0] = 0x00
+        frame[1] = cmd.toByte()
+        frame[2] = (payload.size and 0xFF).toByte()
+        frame[3] = ((payload.size shr 8) and 0xFF).toByte()
+        writeIntLE(frame, 4, cs.toInt())
+        System.arraycopy(payload, 0, frame, 8, payload.size)
+        serialManager.writeRaw(encodeSlip(frame))
     }
 
-    private fun checksum(data: ByteArray): Int {
-        return data.fold(0xEF) { acc, b -> acc xor (b.toInt() and 0xFF) }
-    }
-
-    // ── Send command and read response ────────────────────────────────────
-    private fun sendCommand(cmd: Byte, data: ByteArray = ByteArray(0), chk: Int = 0): ByteArray? {
-        val packet = buildPacket(cmd, data, chk)
-        val encoded = slipEncode(packet)
-        serial.writeRaw(encoded, 2000)
-
-        // Read response
-        val response = mutableListOf<Byte>()
-        val deadline = System.currentTimeMillis() + 3000
-        var inPacket = false
+    private suspend fun getResp(expectCmd: Int, timeout: Int): ByteArray? {
+        val deadline = System.currentTimeMillis() + timeout
+        val slipBuf  = ArrayList<Byte>(256)
+        var inFrame  = false
+        var esc      = false
 
         while (System.currentTimeMillis() < deadline) {
-            val chunk = serial.readRaw(200)
+            val chunk = serialManager.readRaw(100)
+            if (chunk.isEmpty()) { delay(10); continue }
+
             for (b in chunk) {
-                if (b == SLIP_END) {
-                    if (inPacket && response.size > 0) {
-                        val decoded = slipDecode(response.toByteArray())
-                        if (decoded.size >= 8 && decoded[0] == 0x01.toByte() && decoded[1] == cmd) {
-                            return decoded
+                if (!inFrame) {
+                    if (b == Slip.END) inFrame = true
+                    continue
+                }
+                if (b == Slip.END) {
+                    if (slipBuf.size >= 8
+                        && slipBuf[0] == 0x01.toByte()
+                        && (slipBuf[1].toInt() and 0xFF) == expectCmd
+                    ) {
+                        val status = slipBuf[slipBuf.size - 2].toInt() and 0xFF
+                        val errCode = slipBuf[slipBuf.size - 1].toInt() and 0xFF
+                        if (status != 0) {
+                            throw IllegalStateException(
+                                "ROM error: status=$status code=0x${errCode.toString(16)}"
+                            )
                         }
-                        response.clear()
+                        return slipBuf.toByteArray()
                     }
-                    inPacket = true
-                } else if (inPacket) {
-                    response.add(b)
+                    // Wrong command — reset buffer and keep looking
+                    slipBuf.clear(); inFrame = false; esc = false
+                    continue
+                }
+                if (b == Slip.ESC) { esc = true; continue }
+                if (esc) {
+                    esc = false
+                    slipBuf.add(when (b) {
+                        Slip.ESC_END -> Slip.END
+                        Slip.ESC_ESC -> Slip.ESC
+                        else         -> b
+                    })
+                } else {
+                    slipBuf.add(b)
                 }
             }
-            if (response.size > 16 && !inPacket) break
         }
         return null
     }
 
-    // ── Sync ──────────────────────────────────────────────────────────────
-    private fun sync(): Boolean {
-        // Sync packet: 0x07 0x07 0x12 0x20 + 32x 0x55
-        val syncData = ByteArray(36)
-        syncData[0] = 0x07; syncData[1] = 0x07; syncData[2] = 0x12; syncData[3] = 0x20
-        for (i in 4 until 36) syncData[i] = 0x55
-        val resp = sendCommand(CMD_SYNC, syncData) ?: return false
-        return resp.size >= 8 && resp[0] == 0x01.toByte()
-    }
-
-    // ── Change baud ───────────────────────────────────────────────────────
-    private fun changeBaud(newBaud: Int) {
-        val data = ByteArray(8)
-        putInt32LE(data, 0, newBaud)
-        putInt32LE(data, 4, 0)
-        sendCommand(CMD_CHANGE_BAUDRATE, data)
-    }
-
-    // ── SPI attach ────────────────────────────────────────────────────────
-    private fun spiAttach() {
-        val data = ByteArray(8) // zeros = default SPI
-        sendCommand(CMD_SPI_ATTACH, data)
-    }
-
-    // ── Flash data blocks ─────────────────────────────────────────────────
-    private fun flashData(
-        data: ByteArray,
-        address: Int,
-        onProgress: (String) -> Unit,
-        onPercent: (Int) -> Unit
-    ): Boolean {
-        val blockSize = FLASH_BLOCK_SIZE
-        val numBlocks = (data.size + blockSize - 1) / blockSize
-        val eraseSize = numBlocks * blockSize
-
-        // Flash begin
-        val beginData = ByteArray(16)
-        putInt32LE(beginData, 0, eraseSize)
-        putInt32LE(beginData, 4, numBlocks)
-        putInt32LE(beginData, 8, blockSize)
-        putInt32LE(beginData, 12, address)
-
-        val beginResp = sendCommand(CMD_FLASH_BEGIN, beginData) ?: run {
-            onProgress("Flash begin failed")
-            return false
+    private fun encodeSlip(data: ByteArray): ByteArray {
+        val out = ArrayList<Byte>(data.size + 16)
+        out.add(Slip.END)
+        for (b in data) when (b) {
+            Slip.END -> { out.add(Slip.ESC); out.add(Slip.ESC_END) }
+            Slip.ESC -> { out.add(Slip.ESC); out.add(Slip.ESC_ESC) }
+            else     -> out.add(b)
         }
-        if (beginResp.size < 10 || beginResp[8] != 0.toByte()) {
-            onProgress("Flash begin error: status=${beginResp.getOrNull(8)}")
-            return false
-        }
-
-        // Flash blocks
-        for (seq in 0 until numBlocks) {
-            val offset = seq * blockSize
-            val blockData = data.copyOfRange(offset, minOf(offset + blockSize, data.size))
-            val paddedBlock = if (blockData.size < blockSize) {
-                blockData + ByteArray(blockSize - blockData.size) { 0xFF.toByte() }
-            } else blockData
-
-            val blockPacket = ByteArray(16 + paddedBlock.size)
-            putInt32LE(blockPacket, 0, paddedBlock.size)
-            putInt32LE(blockPacket, 4, seq)
-            putInt32LE(blockPacket, 8, 0)
-            putInt32LE(blockPacket, 12, 0)
-            paddedBlock.copyInto(blockPacket, 16)
-
-            val chk = checksum(paddedBlock)
-            val resp = sendCommand(CMD_FLASH_DATA, blockPacket, chk) ?: run {
-                onProgress("Block $seq write failed (no response)")
-                return false
-            }
-
-            val pct = ((seq + 1) * 100 / numBlocks)
-            onPercent(pct)
-            if (seq % 4 == 0) onProgress("Writing block ${seq + 1}/$numBlocks ($pct%)")
-        }
-
-        // Flash end
-        val endData = ByteArray(4)
-        putInt32LE(endData, 0, 0) // reboot after flash
-        sendCommand(CMD_FLASH_END, endData)
-
-        return true
+        out.add(Slip.END)
+        return out.toByteArray()
     }
 
-    private fun putInt32LE(buf: ByteArray, offset: Int, value: Int) {
-        buf[offset]     = (value and 0xFF).toByte()
-        buf[offset + 1] = ((value shr 8) and 0xFF).toByte()
-        buf[offset + 2] = ((value shr 16) and 0xFF).toByte()
-        buf[offset + 3] = ((value shr 24) and 0xFF).toByte()
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+    private fun padToSector(b: ByteArray): ByteArray {
+        val rem = b.size % SECTOR_SIZE
+        return if (rem == 0) b else b + ByteArray(SECTOR_SIZE - rem) { 0xFF.toByte() }
+    }
+
+    private fun calcChecksum(b: ByteArray): Long {
+        var c = 0xEF
+        for (x in b) c = c xor (x.toInt() and 0xFF)
+        return c.toLong() and 0xFF
+    }
+
+    private fun writeIntLE(buf: ByteArray, off: Int, v: Int) {
+        buf[off]     = (v         and 0xFF).toByte()
+        buf[off + 1] = ((v shr  8) and 0xFF).toByte()
+        buf[off + 2] = ((v shr 16) and 0xFF).toByte()
+        buf[off + 3] = ((v shr 24) and 0xFF).toByte()
     }
 }

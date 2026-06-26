@@ -1,7 +1,9 @@
 package com.esp32ide.ui.libraries
 
 import android.os.Bundle
-import android.view.*
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import com.esp32ide.databinding.FragmentLibrariesBinding
@@ -49,7 +51,7 @@ class LibraryFragment : Fragment() {
 
         adapter = LibraryAdapter(popularLibs) { lib ->
             lib.installed = !lib.installed
-            val msg = if (lib.installed) "Installing ${lib.name}..." else "Removed ${lib.name}"
+            val msg = if (lib.installed) "INSTALLING ${lib.name}..." else "REMOVED ${lib.name}"
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             adapter.notifyDataSetChanged()
         }

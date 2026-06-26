@@ -46,6 +46,26 @@ class SerialMonitorFragment : Fragment() {
         setupChart()
         observeSerialState()
         setupDataCallback()
+
+        // Auto-connect if a device is attached while we are here
+        serialManager.onDeviceAttached = { device ->
+            autoConnect()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        autoConnect()
+    }
+
+    private fun autoConnect() {
+        if (!serialManager.isConnected()) {
+            val devices = serialManager.getAvailableDevices()
+            if (devices.isNotEmpty()) {
+                val baud = BAUD_RATES[binding.spinnerBaud.selectedItemPosition]
+                serialManager.connect(devices.first(), baud)
+            }
+        }
     }
 
     private fun setupBaudSpinner() {
@@ -57,24 +77,27 @@ class SerialMonitorFragment : Fragment() {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spinnerBaud.adapter = adapter
         binding.spinnerBaud.setSelection(BAUD_RATES.indexOf(prefs.baudRate).coerceAtLeast(0))
+
+        binding.spinnerBaud.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p0: android.widget.AdapterView<*>?, p1: View?, pos: Int, p3: Long) {
+                val baud = BAUD_RATES[pos]
+                if (prefs.baudRate != baud) {
+                    prefs.baudRate = baud
+                    // Reconnect with new baud if already connected
+                    if (serialManager.isConnected()) {
+                        val devices = serialManager.getAvailableDevices()
+                        if (devices.isNotEmpty()) {
+                            serialManager.disconnect()
+                            serialManager.connect(devices.first(), baud)
+                        }
+                    }
+                }
+            }
+            override fun onNothingSelected(p0: android.widget.AdapterView<*>?) {}
+        }
     }
 
     private fun setupButtons() {
-        binding.btnConnect.setOnClickListener {
-            val devices = serialManager.getAvailableDevices()
-            if (devices.isEmpty()) {
-                appendLog("No USB device found. Plug in ESP32.", "sys")
-                return@setOnClickListener
-            }
-            val baud = BAUD_RATES[binding.spinnerBaud.selectedItemPosition]
-            prefs.baudRate = baud
-            serialManager.connect(devices.first(), baud)
-        }
-
-        binding.btnDisconnect.setOnClickListener {
-            serialManager.disconnect()
-        }
-
         binding.btnClear.setOnClickListener {
             logLines.clear()
             binding.tvLog.text = ""
@@ -185,25 +208,17 @@ class SerialMonitorFragment : Fragment() {
             serialManager.state.collect { state ->
                 when (state) {
                     is SerialState.Disconnected -> {
-                        binding.btnConnect.visibility = View.VISIBLE
-                        binding.btnDisconnect.visibility = View.GONE
-                        binding.tvStatus.text = "Disconnected"
-                        binding.tvStatus.setTextColor(Color.GRAY)
+                        // binding.tvStatus removed
                     }
                     is SerialState.Connecting -> {
-                        binding.tvStatus.text = "Connecting..."
-                        binding.tvStatus.setTextColor(Color.YELLOW)
+                        // binding.tvStatus removed
                     }
                     is SerialState.Connected -> {
-                        binding.btnConnect.visibility = View.GONE
-                        binding.btnDisconnect.visibility = View.VISIBLE
-                        binding.tvStatus.text = "● ${state.device.name} @ ${state.baud}"
-                        binding.tvStatus.setTextColor(Color.GREEN)
+                        // binding.tvStatus removed
                         appendLog("Connected: ${state.device.name} @ ${state.baud} baud", "sys")
                     }
                     is SerialState.Error -> {
-                        binding.tvStatus.text = "Error: ${state.message}"
-                        binding.tvStatus.setTextColor(Color.RED)
+                        // binding.tvStatus removed
                         appendLog("Error: ${state.message}", "err")
                     }
                 }

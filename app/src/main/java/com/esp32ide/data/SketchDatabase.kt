@@ -1,53 +1,110 @@
 package com.esp32ide.data
 
 import android.content.Context
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Delete
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
-// ── Entity ────────────────────────────────────────────────────────────────────
-@Entity(tableName = "sketches")
-data class Sketch(
+// ── Entities ──────────────────────────────────────────────────────────────────
+
+@Entity(tableName = "projects")
+data class Project(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
-    val content: String,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-    val isModified: Boolean = false
+    // Board config per project
+    val boardName: String = "ESP32 Dev Module",
+    val boardFQBN: String = "esp32:esp32:esp32",
+    val cpuFreq: String = "240",
+    val flashFreq: String = "80",
+    val flashMode: String = "qio",
+    val partitionScheme: String = "default",
+    val coreDebugLevel: String = "none"
+)
+
+@Entity(
+    tableName = "project_files",
+    foreignKeys = [
+        ForeignKey(
+            entity = Project::class,
+            parentColumns = ["id"],
+            childColumns = ["projectId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("projectId")]
+)
+data class ProjectFile(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val projectId: Int,
+    val name: String, // e.g. "main.ino", "wifi_helper.h"
+    val content: String,
+    val isMain: Boolean = false, // The primary .ino file
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 // ── DAO ───────────────────────────────────────────────────────────────────────
-@Dao
-interface SketchDao {
-    @Query("SELECT * FROM sketches ORDER BY updatedAt DESC")
-    fun getAllSketches(): Flow<List<Sketch>>
 
-    @Query("SELECT * FROM sketches WHERE id = :id")
-    suspend fun getSketchById(id: Int): Sketch?
+@Dao
+interface ProjectDao {
+    // Project operations
+    @Query("SELECT * FROM projects ORDER BY updatedAt DESC")
+    fun getAllProjects(): Flow<List<Project>>
+
+    @Query("SELECT * FROM projects WHERE id = :id")
+    suspend fun getProjectById(id: Int): Project?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertSketch(sketch: Sketch): Long
+    suspend fun insertProject(project: Project): Long
 
     @Update
-    suspend fun updateSketch(sketch: Sketch)
+    suspend fun updateProject(project: Project)
 
     @Delete
-    suspend fun deleteSketch(sketch: Sketch)
+    suspend fun deleteProject(project: Project)
 
-    @Query("UPDATE sketches SET content = :content, updatedAt = :ts, isModified = 1 WHERE id = :id")
-    suspend fun updateContent(id: Int, content: String, ts: Long = System.currentTimeMillis())
+    // File operations
+    @Query("SELECT * FROM project_files WHERE projectId = :projectId ORDER BY isMain DESC, name ASC")
+    fun getFilesForProject(projectId: Int): Flow<List<ProjectFile>>
 
-    @Query("UPDATE sketches SET name = :name WHERE id = :id")
-    suspend fun renameSketch(id: Int, name: String)
+    @Query("SELECT * FROM project_files WHERE id = :id")
+    suspend fun getFileById(id: Int): ProjectFile?
 
-    @Query("SELECT COUNT(*) FROM sketches")
-    suspend fun getCount(): Int
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFile(file: ProjectFile): Long
+
+    @Update
+    suspend fun updateFile(file: ProjectFile)
+
+    @Delete
+    suspend fun deleteFile(file: ProjectFile)
+
+    @Query("UPDATE project_files SET content = :content, updatedAt = :ts WHERE id = :id")
+    suspend fun updateFileContent(id: Int, content: String, ts: Long = System.currentTimeMillis())
+
+    @Query("SELECT COUNT(*) FROM projects")
+    suspend fun getProjectCount(): Int
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
-@Database(entities = [Sketch::class], version = 1, exportSchema = false)
+
+@Database(entities = [Project::class, ProjectFile::class], version = 2, exportSchema = false)
 abstract class SketchDatabase : RoomDatabase() {
 
-    abstract fun sketchDao(): SketchDao
+    abstract fun projectDao(): ProjectDao
 
     companion object {
         @Volatile
@@ -59,7 +116,9 @@ abstract class SketchDatabase : RoomDatabase() {
                     context.applicationContext,
                     SketchDatabase::class.java,
                     "sketches.db"
-                ).build()
+                )
+                .fallbackToDestructiveMigration() // Simple for now, can add proper migration if needed
+                .build()
                 INSTANCE = instance
                 instance
             }

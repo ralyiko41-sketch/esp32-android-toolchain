@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/bg_base">
+
+    <!-- Toolbar -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+        android:background="@color/bg_panel" android:paddingHorizontal="16dp" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="Project Files" android:textColor="@color/text_primary"
+            android:textSize="16sp" android:fontFamily="monospace" android:textStyle="bold"/>
+        <ImageButton android:id="@+id/btn_new_project" style="@style/ToolbarIconBtn.White"
+            android:src="@drawable/ic_add" android:contentDescription="New Project"/>
+    </LinearLayout>
+
+    <!-- Project List -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_projects"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="8dp"
+        android:clipToPadding="false"/>
+
+    <!-- Empty State -->
+    <TextView android:id="@+id/tv_empty" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:text="No projects found.\nTap + to create one."
+        android:textColor="@color/text_muted" android:gravity="center" android:visibility="gone"/>
+
+</LinearLayout>

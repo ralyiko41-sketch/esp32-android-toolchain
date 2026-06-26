@@ -1,6 +1,8 @@
 package com.esp32ide.ui.libraries
 
-import android.view.*
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
@@ -28,7 +30,10 @@ class LibraryAdapter(
         holder.tvName.text    = lib.name
         holder.tvAuthor.text  = "by ${lib.author}"
         holder.tvVersion.text = "v${lib.version}"
-        holder.btnToggle.text = if (lib.installed) "Remove" else "Install"
+        
+        // STRICTLY SET TO "INSTALL"
+        holder.btnToggle.text = if (lib.installed) "Remove" else "INSTALL"
+
         holder.btnToggle.setOnClickListener { onToggle(lib) }
     }
 

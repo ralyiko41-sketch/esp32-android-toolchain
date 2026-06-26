@@ -1,12 +1,17 @@
 package com.esp32ide.ui.boards
 
+import android.content.Context
 import android.os.Bundle
 import android.view.*
+import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.esp32ide.MainActivity
+import com.esp32ide.R
 import com.esp32ide.data.AppPreferences
 import com.esp32ide.databinding.FragmentBoardsBinding
+import com.esp32ide.ui.settings.BoardConfigDialog
 import com.esp32ide.utils.BoardEntry
 import com.esp32ide.utils.BoardsParser
 import kotlinx.coroutines.launch
@@ -52,6 +57,14 @@ class BoardManagerFragment : Fragment() {
                 binding.tvCurrentBoard.text = "● ${board.name}"
                 binding.tvCurrentFqbn.text = board.fqbn
                 Toast.makeText(context, "Selected: ${board.name}", Toast.LENGTH_SHORT).show()
+                view?.hideKeyboard()
+
+                // ⚡ REDIRECT LOGIC: Show Config Pop-up, then on Apply go to Flash
+                val dialog = BoardConfigDialog()
+                dialog.onApplied = {
+                    (activity as? MainActivity)?.navigateTo(R.id.nav_flash)
+                }
+                dialog.show(parentFragmentManager, "board_config")
             }
         )
         binding.rvBoards.adapter = adapter
@@ -143,4 +156,9 @@ class BoardManagerFragment : Fragment() {
     override fun onDestroyView() { super.onDestroyView(); _binding = null }
 
     companion object { const val REQUEST_FILE = 101 }
+}
+
+fun View.hideKeyboard() {
+    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    imm.hideSoftInputFromWindow(windowToken, 0)
 }

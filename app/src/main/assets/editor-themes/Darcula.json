@@ -1,0 +1,29 @@
+{
+  "name": "Darcula",
+  "source": "Based on published IntelliJ IDEA Community Edition 'Darcula' default color values (Apache 2.0 licensed, JetBrains open-source). Re-implemented from public hex values, not copied from any binary asset.",
+  "editor": {
+    "background": "#2B2B2B",
+    "foreground": "#A9B7C6",
+    "lineNumber": "#606366",
+    "lineNumberActive": "#A4A3A3",
+    "gutterBackground": "#313335",
+    "selection": "#214283",
+    "cursor": "#A9B7C6",
+    "currentLineHighlight": "#323232"
+  },
+  "syntax": {
+    "keyword": "#CC7832",
+    "type": "#A9B7C6",
+    "string": "#6A8759",
+    "char": "#6A8759",
+    "number": "#6897BB",
+    "comment": "#808080",
+    "function": "#FFC66D",
+    "operator": "#A9B7C6",
+    "preprocessor": "#BBB529",
+    "identifier": "#A9B7C6",
+    "constant": "#9876AA",
+    "annotation": "#BBB529",
+    "error": "#FF6B68"
+  }
+}

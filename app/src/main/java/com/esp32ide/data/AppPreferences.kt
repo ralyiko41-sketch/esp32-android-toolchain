@@ -17,6 +17,26 @@ class AppPreferences(context: Context) {
         get() = prefs.getString("board_fqbn", "esp32:esp32:esp32") ?: "esp32:esp32:esp32"
         set(v) = prefs.edit().putString("board_fqbn", v).apply()
 
+    var cpuFreq: String
+        get() = prefs.getString("cpu_freq", "240") ?: "240"
+        set(v) = prefs.edit().putString("cpu_freq", v).apply()
+
+    var flashFreq: String
+        get() = prefs.getString("flash_freq", "80") ?: "80"
+        set(v) = prefs.edit().putString("flash_freq", v).apply()
+
+    var flashMode: String
+        get() = prefs.getString("flash_mode", "qio") ?: "qio"
+        set(v) = prefs.edit().putString("flash_mode", v).apply()
+
+    var partitionScheme: String
+        get() = prefs.getString("partition_scheme", "default") ?: "default"
+        set(v) = prefs.edit().putString("partition_scheme", v).apply()
+
+    var coreDebugLevel: String
+        get() = prefs.getString("core_debug", "none") ?: "none"
+        set(v) = prefs.edit().putString("core_debug", v).apply()
+
     var importedBoardsTxt: String
         get() = prefs.getString("boards_txt", "") ?: ""
         set(v) = prefs.edit().putString("boards_txt", v).apply()
@@ -46,6 +66,10 @@ class AppPreferences(context: Context) {
     var darkTheme: Boolean
         get() = prefs.getBoolean("dark_theme", true)
         set(v) = prefs.edit().putBoolean("dark_theme", v).apply()
+
+    var editorTheme: String
+        get() = prefs.getString("editor_theme", "Darcula") ?: "Darcula"
+        set(v) = prefs.edit().putString("editor_theme", v).apply()
 
     // ── Compiler ──────────────────────────────────────────────────────────
     var arduinoCliReady: Boolean

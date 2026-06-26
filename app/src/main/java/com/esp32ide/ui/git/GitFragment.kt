@@ -1,22 +1,27 @@
 package com.esp32ide.ui.git
 
 import android.os.Bundle
-import android.view.*
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.data.AppPreferences
-import com.esp32ide.data.Sketch
+import com.esp32ide.data.Project
+import com.esp32ide.data.ProjectFile
 import com.esp32ide.data.SketchDatabase
 import com.esp32ide.databinding.FragmentGitBinding
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
-import okhttp3.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-import android.util.Base64
 
 class GitFragment : Fragment() {
 
@@ -126,8 +131,12 @@ class GitFragment : Fragment() {
                 if (!resp.isSuccessful) { log("✗ HTTP ${resp.code}"); setBusy(false); return@launch }
 
                 val files = org.json.JSONArray(resp.body?.string() ?: "[]")
-                val dao = SketchDatabase.getInstance(requireContext()).sketchDao()
+                val dao = SketchDatabase.getInstance(requireContext()).projectDao()
                 var loaded = 0
+
+                // Create a single project for the clone
+                val projectName = repoPath().substringAfter("/")
+                val projectId = dao.insertProject(Project(name = projectName)).toInt()
 
                 for (i in 0 until files.length()) {
                     val f = files.getJSONObject(i)
@@ -138,12 +147,16 @@ class GitFragment : Fragment() {
                     val contentResp = client.newCall(Request.Builder().url(dlUrl).build()).execute()
                     val content = contentResp.body?.string() ?: continue
 
-                    val sketchName = name.substringBeforeLast(".")
-                    dao.insertSketch(Sketch(name = sketchName, content = content))
+                    dao.insertFile(ProjectFile(
+                        projectId = projectId,
+                        name = name,
+                        content = content,
+                        isMain = name.endsWith(".ino")
+                    ))
                     log("  ✓ Loaded: $name")
                     loaded++
                 }
-                log("✓ Clone done! $loaded file(s) added to editor.")
+                log("✓ Clone done! $loaded file(s) added to project '$projectName'.")
             } catch (e: Exception) { log("✗ ${e.message}") }
             withContext(Dispatchers.Main) { setBusy(false) }
         }
@@ -159,17 +172,19 @@ class GitFragment : Fragment() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val dao = SketchDatabase.getInstance(requireContext()).sketchDao()
+                val dao = SketchDatabase.getInstance(requireContext()).projectDao()
                 var pushed = 0
 
-                // Collect all sketches
-                val sketches = dao.getAllSketches().first()
+                // For a real app, we'd need to know WHICH project to push.
+                // Assuming we push the LAST opened project for this mock.
+                val projectId = prefs.lastSketchId
+                val files = dao.getFilesForProject(projectId).first()
 
-                for (sketch in sketches) {
-                    val fileName = "${sketch.name}.ino"
-                    val content64 = Base64.encodeToString(
-                        sketch.content.toByteArray(Charsets.UTF_8),
-                        Base64.NO_WRAP
+                for (file in files) {
+                    val fileName = file.name
+                    val content64 = android.util.Base64.encodeToString(
+                        file.content.toByteArray(Charsets.UTF_8),
+                        android.util.Base64.NO_WRAP
                     )
                     // Get current SHA
                     var sha: String? = null

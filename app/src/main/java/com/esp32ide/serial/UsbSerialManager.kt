@@ -48,6 +48,29 @@ class UsbSerialManager(private val context: Context) {
     var onDeviceAttached: ((SerialDevice) -> Unit)? = null
     var onDeviceDetached: (() -> Unit)? = null
 
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val device = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
+                    if (device != null && (_state.value as? SerialState.Connected)?.device?.device == device) {
+                        disconnect()
+                        onDeviceDetached?.invoke()
+                    }
+                }
+            }
+        }
+    }
+
+    init {
+        context.registerReceiver(usbReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED))
+    }
+
     // ── Scan for connected ESP32/USB-serial devices ───────────────────────
     fun getAvailableDevices(): List<SerialDevice> {
         val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
@@ -173,6 +196,11 @@ class UsbSerialManager(private val context: Context) {
 
     fun writeRaw(data: ByteArray, timeoutMs: Int = 3000) {
         try { serialPort?.write(data, timeoutMs) } catch (_: Exception) {}
+    }
+
+    fun flushInput() {
+        val buf = ByteArray(4096)
+        try { repeat(5) { serialPort?.read(buf, 30) } } catch (_: Exception) {}
     }
 
     fun stopReading() { ioManager?.stop(); ioManager = null }

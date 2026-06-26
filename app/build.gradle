@@ -11,7 +11,7 @@ android {
     defaultConfig {
         applicationId "com.esp32ide"
         minSdk 26
-        targetSdk 34
+        targetSdk 28 // ⚡ THE MAGIC W^X KERNEL RELAXER
         versionCode 1
         versionName "2.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -34,9 +34,7 @@ android {
     }
 
     compileOptions {
-        // --- ADDED LINE 1: Enables support for older Android desugaring ---
         coreLibraryDesugaringEnabled true
-
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
@@ -53,7 +51,6 @@ android {
 }
 
 dependencies {
-    // --- ADDED LINE 2: Heavy library support tool ---
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
 
     // AndroidX core
@@ -102,7 +99,7 @@ dependencies {
     // Zip — extract arduino-cli
     implementation 'org.apache.commons:commons-compress:1.26.0'
 
-    // Jetpack Compose
+    // Jetpack Compose BOM
     def composeBom = platform('androidx.compose:compose-bom:2024.02.00')
     implementation composeBom
     androidTestImplementation composeBom
@@ -114,7 +111,7 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-extended'
     implementation 'androidx.activity:activity-compose:1.8.2'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0'
-    
+
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }

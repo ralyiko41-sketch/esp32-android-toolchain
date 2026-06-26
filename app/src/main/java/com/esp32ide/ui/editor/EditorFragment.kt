@@ -4,34 +4,43 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.MainActivity
 import com.esp32ide.R
 import com.esp32ide.compiler.ArduinoCompiler
 import com.esp32ide.data.AppPreferences
-import com.esp32ide.data.Sketch
+import com.esp32ide.data.Project
+import com.esp32ide.data.ProjectFile
 import com.esp32ide.data.SketchDatabase
 import com.esp32ide.databinding.FragmentEditorBinding
-import io.github.rosemoe.sora.langs.textmate.TextMateLanguage
+import com.esp32ide.ui.settings.BoardConfigDialog
+import com.esp32ide.utils.ThemeManager
 import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
-import io.github.rosemoe.sora.widget.schemes.SchemeGitHub
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
+import android.view.GestureDetector
+import android.view.MotionEvent
+import kotlin.math.abs
 
 class EditorFragment : Fragment() {
 
     private var _binding: FragmentEditorBinding? = null
     private val binding get() = _binding!!
     private val prefs by lazy { AppPreferences(requireContext()) }
-    private val dao by lazy { SketchDatabase.getInstance(requireContext()).sketchDao() }
-    private val compiler by lazy { ArduinoCompiler(requireContext()) }
-    private var currentSketchId = 0
-    private var currentSketchName = ""
+    private val dao by lazy { SketchDatabase.getInstance(requireContext()).projectDao() }
+    
+    private var currentProject: Project? = null
+    private var projectFiles = mutableListOf<ProjectFile>()
+    private var activeFileIndex = -1
+
+    val currentProjectIdPublic: Int get() = currentProject?.id ?: -1
+    val currentProjectNamePublic: String? get() = currentProject?.name
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, s: Bundle?): View {
         _binding = FragmentEditorBinding.inflate(inflater, container, false)
@@ -44,7 +53,7 @@ class EditorFragment : Fragment() {
         setupToolbar()
         setupActionButtons()
         setupSymbolBar()
-        loadLastSketch()
+        loadCurrentProject()
     }
 
     private fun setupEditor() {
@@ -52,9 +61,11 @@ class EditorFragment : Fragment() {
             setTextSize(prefs.fontSize.toFloat())
             isWordwrap = prefs.wordWrap
             
-            // Reorder: Set language FIRST, then color scheme to ensure styles are applied
+            // ⚡ RESTORE: Revert to high-performance original engine and colors
             setEditorLanguage(ArduinoLanguage())
-            colorScheme = if (prefs.darkTheme) SchemeDarcula() else SchemeGitHub()
+            
+            // Apply the custom color scheme to ensure 1 2 3 colors are correct
+            colorScheme = ArduinoColorScheme()
         }
     }
 
@@ -62,21 +73,37 @@ class EditorFragment : Fragment() {
         binding.btnUndo.setOnClickListener { binding.editor.undo() }
         binding.btnRedo.setOnClickListener { binding.editor.redo() }
         binding.btnSave.setOnClickListener {
-            saveCurrentSketch()
+            saveCurrentFile()
             Toast.makeText(context, "Saved ✓", Toast.LENGTH_SHORT).show()
         }
         
+        binding.btnNewFile.setOnClickListener { showNewFileInternalDialog() }
         binding.btnNavigator.setOnClickListener { showNavigator() }
 
-        binding.btnNewFile.setOnClickListener { showNewFileDialog() }
+        setupTouchToSwitch()
+    }
 
-        binding.tvBoardName.text = prefs.selectedBoard
+    private fun setupTouchToSwitch() {
+        binding.tvFileName.setOnClickListener {
+            if (projectFiles.size > 1) {
+                val fileNames = projectFiles.map { it.name }.toTypedArray()
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Switch File")
+                    .setItems(fileNames) { _, which ->
+                        switchToFile(which)
+                    }
+                    .show()
+            } else {
+                Toast.makeText(context, "Only one file in project", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun setupActionButtons() {
         binding.btnCompile.setOnClickListener { compile() }
         binding.btnFlash.setOnClickListener {
-            (activity as? MainActivity)?.navigateTo(R.id.nav_flash)
+            // Trigger Board Select -> Config -> Flash flow
+            (activity as? MainActivity)?.navigateTo(R.id.nav_boards)
         }
         binding.btnMonitor.setOnClickListener {
             (activity as? MainActivity)?.navigateTo(R.id.nav_monitor)
@@ -86,84 +113,95 @@ class EditorFragment : Fragment() {
     private fun setupSymbolBar() {
         val symbols = listOf("{", "}", "(", ")", ";", ":", "<", ">", "\"", "'", "/", "+", "-", "*", "=", "!", "&", "|")
         binding.symbolBar.adapter = SymbolAdapter(symbols) { s ->
-            binding.editor.pasteText(s)
+            // 🐛 BUG FIX: Use direct insert to prevent vanishing words
+            binding.editor.insertText(s, 1)
         }
     }
 
-    private fun showNavigator() {
-        val text = binding.editor.text.toString()
-        val symbols = mutableListOf<Pair<String, Int>>() // Name to Line
-        
-        // Match common C++ function patterns: void setup(), int getVal(), etc.
-        val regex = Regex("""(void|int|float|String|bool|uint\d+_t)\s+([a-zA-Z0-9_]+)\s*\(""")
-        
-        val lines = text.split("\n")
-        lines.forEachIndexed { index, line ->
-            val match = regex.find(line)
-            if (match != null) {
-                symbols.add("${match.groupValues[1]} ${match.groupValues[2]}()" to index)
+    private fun loadCurrentProject() {
+        lifecycleScope.launch {
+            val projectId = prefs.lastSketchId // Reusing this for current projectId
+            val project = dao.getProjectById(projectId) ?: return@launch
+            currentProject = project
+            binding.tvBoardName.text = project.boardName
+            
+            dao.getFilesForProject(projectId).collect { files ->
+                projectFiles = files.toMutableList()
+                if (projectFiles.isNotEmpty() && activeFileIndex == -1) {
+                    val mainIdx = projectFiles.indexOfFirst { it.isMain }.coerceAtLeast(0)
+                    switchToFile(mainIdx)
+                }
             }
         }
-        
-        if (symbols.isEmpty()) {
-            Toast.makeText(context, "No functions found in this file", Toast.LENGTH_SHORT).show()
-            return
+    }
+
+    private fun switchToFile(index: Int) {
+        if (activeFileIndex != -1) {
+            saveCurrentFile()
         }
-        
-        val names = symbols.map { it.first }.toTypedArray()
-        android.app.AlertDialog.Builder(requireContext())
-            .setTitle("Code Navigator")
-            .setItems(names) { _, which ->
-                val line = symbols[which].second
-                // Jump to line (0-indexed)
-                binding.editor.jumpToLine(line)
-                Toast.makeText(context, "Jumped to ${symbols[which].first}", Toast.LENGTH_SHORT).show()
+        activeFileIndex = index
+        val file = projectFiles[index]
+        binding.tvFileName.text = file.name
+        binding.editor.setText(file.content)
+    }
+
+    private fun saveCurrentFile() {
+        if (activeFileIndex == -1) return
+        val content = binding.editor.text.toString()
+        val file = projectFiles[activeFileIndex]
+        lifecycleScope.launch(Dispatchers.IO) {
+            dao.updateFileContent(file.id, content)
+        }
+    }
+
+    fun saveCurrentFilePublic() = saveCurrentFile()
+
+    private fun showNewFileInternalDialog() {
+        val input = EditText(requireContext()).apply { hint = "filename.h" }
+        AlertDialog.Builder(requireContext())
+            .setTitle("New File in Project")
+            .setView(input)
+            .setPositiveButton("Add") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isNotEmpty()) {
+                    addNewFileToProject(name)
+                }
             }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun loadLastSketch() {
+    private fun addNewFileToProject(name: String) {
+        val project = currentProject ?: return
         lifecycleScope.launch {
-            val sketches = dao.getAllSketches().first()
-            if (sketches.isEmpty()) {
-                val default = Sketch(name = "sketch_main", content = DEFAULT_SKETCH)
-                val id = dao.insertSketch(default).toInt()
-                loadSketch(default.copy(id = id))
-            } else {
-                val lastId = prefs.lastSketchId
-                val last = sketches.find { it.id == lastId } ?: sketches[0]
-                loadSketch(last)
-            }
-        }
-    }
-
-    private fun loadSketch(sketch: Sketch) {
-        currentSketchId = sketch.id
-        currentSketchName = sketch.name
-        binding.tvFileName.text = sketch.name
-        binding.editor.setText(sketch.content)
-        prefs.lastSketchId = sketch.id
-    }
-
-    fun getEditorText() = binding.editor.text.toString()
-
-    private fun saveCurrentSketch() {
-        val content = getEditorText()
-        lifecycleScope.launch(Dispatchers.IO) {
-            dao.updateContent(currentSketchId, content)
+            val newFile = ProjectFile(
+                projectId = project.id,
+                name = name,
+                content = "",
+                isMain = false
+            )
+            dao.insertFile(newFile)
         }
     }
 
     private fun compile() {
         val activity = activity as MainActivity
-        if (activity.isCompiling) {
-            Toast.makeText(context, "Already compiling...", Toast.LENGTH_SHORT).show()
-            return
+        if (activity.isCompiling) return
+        
+        saveCurrentFile()
+        
+        val project = currentProject ?: return
+        val compiler = ArduinoCompiler(requireContext())
+        
+        val fullContent = StringBuilder()
+        projectFiles.forEach { file ->
+            if (file.name.endsWith(".h")) {
+                fullContent.append("// File: ${file.name}\n")
+                fullContent.append(file.content).append("\n\n")
+            }
         }
-        saveCurrentSketch()
-
-        val code = binding.editor.text.toString()
-        val fqbn = prefs.boardFQBN
+        val mainFile = projectFiles.find { it.isMain } ?: projectFiles[0]
+        fullContent.append(mainFile.content)
 
         binding.btnCompile.isEnabled = false
         binding.compileProgress.visibility = View.VISIBLE
@@ -173,7 +211,7 @@ class EditorFragment : Fragment() {
 
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                compiler.compile(code, fqbn) { line ->
+                compiler.compile(fullContent.toString(), project.boardFQBN) { line ->
                     lifecycleScope.launch(Dispatchers.Main) {
                         _binding?.let { b -> b.tvCompileStatus.text = line.take(80) }
                     }
@@ -187,55 +225,63 @@ class EditorFragment : Fragment() {
                 if (result.success) {
                     activity.lastCompiledBinPath = result.binPath
                     activity.lastCompiledBinSize = result.binSize
-                    b.tvCompileStatus.text = "✓ Compiled successfully!"
+                    b.tvCompileStatus.text = "✓ Compiled Successfully!"
                 } else {
                     showCompileError(result.error)
-                    b.tvCompileStatus.text = "✗ Compile failed"
+                    b.tvCompileStatus.text = "✗ Compile Failed"
                 }
             }
         }
     }
 
-    private fun showNewFileDialog() {
-        NewFileDialog { name ->
-            lifecycleScope.launch {
-                val newSketch = Sketch(name = name, content = DEFAULT_SKETCH)
-                val id = dao.insertSketch(newSketch).toInt()
-                loadSketch(newSketch.copy(id = id))
+    private fun showNavigator() {
+        val text = binding.editor.text.toString()
+        val symbols = mutableListOf<Pair<String, Int>>()
+        val regex = Regex("""(void|int|float|String|bool|uint\d+_t)\s+([a-zA-Z0-9_]+)\s*\(""")
+        val lines = text.split("\n")
+        lines.forEachIndexed { index, line ->
+            val match = regex.find(line)
+            if (match != null) symbols.add("${match.groupValues[1]} ${match.groupValues[2]}()" to index)
+        }
+        if (symbols.isEmpty()) {
+            Toast.makeText(context, "No functions found", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val names = symbols.map { it.first }.toTypedArray()
+        AlertDialog.Builder(requireContext())
+            .setTitle("Code Navigator")
+            .setItems(names) { _, which ->
+                binding.editor.jumpToLine(symbols[which].second)
             }
-        }.show(parentFragmentManager, "new_file")
+            .show()
     }
 
     private fun showCompileError(error: String) {
-        android.app.AlertDialog.Builder(requireContext())
+        AlertDialog.Builder(requireContext())
             .setTitle("Compile Error")
             .setMessage(error)
             .setPositiveButton("OK", null)
             .show()
     }
 
+    fun getEditorText() = binding.editor.text.toString()
+
+    fun undoPublic() = binding.editor.undo()
+
+    fun redoPublic() = binding.editor.redo()
+
+    fun showSearchPublic() {
+        Toast.makeText(context, "Search coming soon", Toast.LENGTH_SHORT).show()
+    }
+
+    fun triggerCompletionPublic() {
+        // Placeholder
+    }
+
     override fun onPause() {
         super.onPause()
-        saveCurrentSketch()
+        saveCurrentFile()
     }
 
     override fun onDestroyView() { super.onDestroyView(); _binding = null }
-
-    companion object {
-        const val DEFAULT_SKETCH = """// ESP32 Blink
-#define LED_BUILTIN 2
-
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_BUILTIN, OUTPUT);
-  Serial.println("ESP32 IDE Ready!");
-}
-
-void loop() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(1000);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(1000);
-}"""
-    }
 }

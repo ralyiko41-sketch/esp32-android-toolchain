@@ -9,6 +9,9 @@ import com.esp32ide.MainActivity
 import com.esp32ide.R
 import com.esp32ide.compiler.ArduinoCompiler
 import com.esp32ide.data.AppPreferences
+import com.esp32ide.data.Project
+import com.esp32ide.data.ProjectFile
+import com.esp32ide.data.SketchDatabase
 import com.esp32ide.databinding.FragmentFlashBinding
 import com.esp32ide.serial.EspFlasher
 import com.esp32ide.serial.SerialDevice
@@ -149,9 +152,9 @@ class FlashFragment : Fragment() {
         log("Connecting to ${device.name}...")
 
         try {
-            // Connect at low baud first for bootloader
+            // ── Connect at 115200 ─────────────────────────────────────────────
             serialManager.connect(device, 115200)
-            delay(800) // Slightly longer for stability
+            delay(1200) // Wait for USB permission dialog + connection to settle
 
             if (!serialManager.isConnected()) {
                 log("✗ Failed to connect. Check USB connection and grant permission.")
@@ -159,19 +162,23 @@ class FlashFragment : Fragment() {
                 return
             }
 
-            // Stop serial reading during flash
+            // ── CRITICAL: Stop async IO manager BEFORE flashing ───────────────
+            // If still running, it steals SYNC response bytes from the flasher
             serialManager.stopReading()
+            delay(300) // Let it fully stop
 
             val flasher = EspFlasher(serialManager)
             val result = flasher.flash(
                 firmwarePath = binPath,
-                flashBaud = prefs.flashBaud,
-                onProgress = { line -> lifecycleScope.launch(Dispatchers.Main) { log(line) } },
-                onPercent = { pct ->
+                flashBaud    = 115200,
+                onProgress   = { line ->
+                    lifecycleScope.launch(Dispatchers.Main) { log(line) }
+                },
+                onPercent    = { pct ->
                     lifecycleScope.launch(Dispatchers.Main) {
                         _binding?.let { b ->
                             b.flashProgress.progress = pct
-                            b.tvFlashPercent.text = "$pct%"
+                            b.tvFlashPercent.text    = "$pct%"
                         }
                     }
                 }
@@ -185,12 +192,10 @@ class FlashFragment : Fragment() {
                     log(result.message)
                     _binding?.let { b ->
                         b.flashProgress.progress = 100
-                        b.tvFlashPercent.text = "100%"
+                        b.tvFlashPercent.text    = "100%"
                     }
                     Toast.makeText(context, "Flash successful! 🎉", Toast.LENGTH_LONG).show()
-                    
-                    // Safe navigation to Monitor
-                    delay(1000)
+                    delay(1500)
                     val mainActivity = activity as? MainActivity
                     if (mainActivity != null && isAdded) {
                         mainActivity.navigateTo(R.id.nav_monitor)
@@ -220,9 +225,11 @@ class FlashFragment : Fragment() {
             contentFromEditor
         } else {
             try {
-                val dao = com.esp32ide.data.SketchDatabase.getInstance(requireContext()).sketchDao()
-                val sketches = dao.getAllSketches().first()
-                sketches.firstOrNull()?.content ?: ""
+                val dao = com.esp32ide.data.SketchDatabase.getInstance(requireContext()).projectDao()
+                val projectId = prefs.lastSketchId
+                val files = dao.getFilesForProject(projectId).first()
+                // Return main file content or first file
+                files.find { it.isMain }?.content ?: files.firstOrNull()?.content ?: ""
             } catch (e: Exception) {
                 ""
             }

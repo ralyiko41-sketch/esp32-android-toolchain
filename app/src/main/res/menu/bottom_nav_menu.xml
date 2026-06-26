@@ -5,6 +5,10 @@
         android:icon="@drawable/ic_code"
         android:title="Code Editor" />
     <item
+        android:id="@+id/nav_files"
+        android:icon="@drawable/ic_folder"
+        android:title="Project Files" />
+    <item
         android:id="@+id/nav_monitor"
         android:icon="@drawable/ic_terminal"
         android:title="Serial Monitor" />
@@ -33,12 +37,10 @@
         android:icon="@drawable/ic_cloud"
         android:title="OTA Update" />
 
-    <item android:title="System">
-        <menu>
-            <item
-                android:id="@+id/nav_settings"
-                android:icon="@drawable/ic_settings"
-                android:title="Settings" />
-        </menu>
-    </item>
+    <group android:id="@+id/system_group">
+        <item
+            android:id="@+id/nav_settings"
+            android:icon="@drawable/ic_settings"
+            android:title="Settings" />
+    </group>
 </menu>

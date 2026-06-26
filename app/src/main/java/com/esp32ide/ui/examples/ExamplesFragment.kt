@@ -7,7 +7,8 @@ import androidx.fragment.app.Fragment
 import com.esp32ide.MainActivity
 import com.esp32ide.R
 import com.esp32ide.data.AppPreferences
-import com.esp32ide.data.Sketch
+import com.esp32ide.data.Project
+import com.esp32ide.data.ProjectFile
 import com.esp32ide.data.SketchDatabase
 import com.esp32ide.databinding.FragmentExamplesBinding
 import com.esp32ide.utils.Examples
@@ -34,12 +35,20 @@ class ExamplesFragment : Fragment() {
                 .setMessage("This will open the example in the editor as a new file.")
                 .setPositiveButton("Load") { _, _ ->
                     lifecycleScope.launch {
-                        val dao = SketchDatabase.getInstance(requireContext()).sketchDao()
-                        val id = dao.insertSketch(
-                            Sketch(name = example.key, content = example.code)
+                        val dao = SketchDatabase.getInstance(requireContext()).projectDao()
+                        val projectId = dao.insertProject(
+                            Project(name = example.name)
+                        ).toInt()
+                        dao.insertFile(
+                            ProjectFile(
+                                projectId = projectId,
+                                name = "${example.key}.ino",
+                                content = example.code,
+                                isMain = true
+                            )
                         )
-                        // CRITICAL: Update lastSketchId so Editor loads THIS example
-                        AppPreferences(requireContext()).lastSketchId = id.toInt()
+                        // CRITICAL: Update lastSketchId so Editor loads THIS example project
+                        AppPreferences(requireContext()).lastSketchId = projectId
 
                         requireActivity().runOnUiThread {
                             Toast.makeText(context, "Loaded: ${example.name}", Toast.LENGTH_SHORT).show()

@@ -35,18 +35,19 @@
 
     <com.google.android.material.navigation.NavigationView
         android:id="@+id/nav_view"
-        android:layout_width="300dp"
+        android:layout_width="280dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:background="@color/bg_panel"
         app:headerLayout="@layout/nav_header_main"
-        app:itemIconPadding="18dp"
-        app:itemHorizontalPadding="16dp"
+        app:itemIconPadding="24dp"
+        app:itemHorizontalPadding="22dp"
         app:itemIconTint="@color/nav_selector"
         app:itemTextColor="@color/nav_selector"
-        app:itemIconSize="22dp"
+        app:itemIconSize="24dp"
         app:itemMaxLines="1"
         app:itemShapeFillColor="@color/bg_surface"
+        app:itemShapeAppearanceOverlay="@style/NavShapeAppearance"
         app:itemTextAppearance="@style/NavDrawerItemAppearance"
         app:menu="@menu/bottom_nav_menu" />
 

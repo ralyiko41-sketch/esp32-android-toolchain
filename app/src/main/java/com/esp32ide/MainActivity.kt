@@ -1,13 +1,21 @@
 package com.esp32ide
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.view.View
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.esp32ide.data.AppPreferences
@@ -17,6 +25,7 @@ import com.esp32ide.ui.boards.BoardManagerFragment
 import com.esp32ide.ui.compose.IDEMenuBar
 import com.esp32ide.ui.editor.EditorFragment
 import com.esp32ide.ui.examples.ExamplesFragment
+import com.esp32ide.ui.files.FilesFragment
 import com.esp32ide.ui.flash.FlashFragment
 import com.esp32ide.ui.git.GitFragment
 import com.esp32ide.ui.libraries.LibraryFragment
@@ -24,6 +33,7 @@ import com.esp32ide.ui.monitor.SerialMonitorFragment
 import com.esp32ide.ui.ota.OTAFragment
 import com.esp32ide.ui.settings.SettingsFragment
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -38,8 +48,12 @@ class MainActivity : AppCompatActivity() {
     var lastCompiledBinSize: Int = 0
     var isCompiling: Boolean = false
 
+    private var permissionDialog: AlertDialog? = null
+
     // Callbacks from editor to monitor
     var onSerialLine: ((String, String) -> Unit)? = null // (timestamp, line)
+
+    private val isMonitorMode = MutableStateFlow(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Apply theme before super
@@ -61,7 +75,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             lifecycleScope.launch {
                 // Pre-warm DB
-                com.esp32ide.data.SketchDatabase.getInstance(this@MainActivity).sketchDao().getCount()
+                com.esp32ide.data.SketchDatabase.getInstance(this@MainActivity).projectDao().getProjectCount()
                 
                 withContext(Dispatchers.Main) {
                     loadFragment(EditorFragment())
@@ -76,23 +90,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        checkAndEnforceStoragePermissions()
+    }
+
+    private fun checkAndEnforceStoragePermissions() {
+        val hasFullAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (!hasFullAccess) {
+            showBlockingPermissionDialog()
+        } else {
+            permissionDialog?.dismiss()
+            permissionDialog = null
+        }
+    }
+
+    private fun showBlockingPermissionDialog() {
+        if (permissionDialog?.isShowing == true) return
+
+        permissionDialog = AlertDialog.Builder(this)
+            .setTitle("Permission Required")
+            .setMessage("Storage Permission Required to operate the offline C++ compiler.")
+            .setCancelable(false)
+            .setPositiveButton("GRANT IN SETTINGS") { _, _ ->
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                } else {
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                }
+                startActivity(intent)
+            }
+            .create()
+        
+        permissionDialog?.setCanceledOnTouchOutside(false)
+        permissionDialog?.show()
+    }
+
     private fun setupDrawer() {
         binding.toolbar.setNavigationOnClickListener {
             binding.drawerLayout.openDrawer(androidx.core.view.GravityCompat.START)
         }
 
         binding.navView.setNavigationItemSelectedListener { item ->
-            when (item.itemId) {
-                R.id.nav_editor   -> loadFragment(EditorFragment())
-                R.id.nav_monitor  -> loadFragment(SerialMonitorFragment())
-                R.id.nav_flash    -> loadFragment(FlashFragment())
-                R.id.nav_libs     -> loadFragment(LibraryFragment())
-                R.id.nav_boards   -> loadFragment(BoardManagerFragment())
-                R.id.nav_examples -> loadFragment(ExamplesFragment())
-                R.id.nav_git      -> loadFragment(GitFragment())
-                R.id.nav_ota      -> loadFragment(OTAFragment())
-                R.id.nav_settings -> loadFragment(SettingsFragment())
-            }
+            navigateTo(item.itemId)
             binding.drawerLayout.closeDrawer(androidx.core.view.GravityCompat.START)
             true
         }
@@ -102,7 +151,11 @@ class MainActivity : AppCompatActivity() {
         // Add the Compose 3-dot menu to the Toolbar
         val composeView = ComposeView(this).apply {
             setContent {
-                IDEMenuBar()
+                val showStatus = isMonitorMode.collectAsState().value
+                IDEMenuBar(
+                    showStatusOnly = showStatus,
+                    serialStateFlow = serialManager.state
+                )
             }
         }
         binding.toolbar.addView(composeView, android.view.ViewGroup.LayoutParams(
@@ -138,6 +191,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun loadFragment(fragment: Fragment) {
+        isMonitorMode.value = fragment is SerialMonitorFragment
         val tag = if (fragment is EditorFragment) "editor" else null
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_container, fragment, tag)
@@ -149,6 +203,7 @@ class MainActivity : AppCompatActivity() {
         // Simulate click to load fragment
         when (itemId) {
             R.id.nav_editor   -> loadFragment(EditorFragment())
+            R.id.nav_files    -> loadFragment(FilesFragment())
             R.id.nav_monitor  -> loadFragment(SerialMonitorFragment())
             R.id.nav_flash    -> loadFragment(FlashFragment())
             R.id.nav_libs     -> loadFragment(LibraryFragment())
@@ -161,7 +216,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleUsbAttached() {
-        navigateTo(R.id.nav_flash)
+        // Notify serial manager listeners
+        val devices = serialManager.getAvailableDevices()
+        if (devices.isNotEmpty()) {
+            serialManager.onDeviceAttached?.invoke(devices.first())
+        }
+        // Navigate to Serial Monitor automatically as requested
+        navigateTo(R.id.nav_monitor)
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -3,10 +3,21 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.USB_PERMISSION" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- 1. Legacy Storage (POSIX access for API <= 29) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <!-- 2. Android 11+ (API 30+) Broad Storage Access (All Files) -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        xmlns:tools="http://schemas.android.com/tools"
+        tools:ignore="ScopedStorage" />
+
+    <!-- 3. Android 13+ (API 33+) Granular Media Access -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <!-- USB Host — required to talk to ESP32 via USB -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
@@ -21,7 +32,8 @@
         android:theme="@style/Theme.ESP32IDE"
         android:largeHeap="true"
         android:usesCleartextTraffic="true"
-        android:extractNativeLibs="true">
+        android:extractNativeLibs="true"
+        android:requestLegacyExternalStorage="true">
 
         <activity
             android:name=".MainActivity"
